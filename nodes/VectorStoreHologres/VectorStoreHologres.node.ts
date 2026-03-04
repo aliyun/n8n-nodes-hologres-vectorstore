@@ -407,27 +407,28 @@ export class VectorStoreHologres implements INodeType {
 					{
 						name: 'Get Many',
 						value: 'load',
-						description: 'Get many ranked documents from vector store for a given query',
-						action: 'Get many ranked documents from vector store for a given query',
+						description: 'Get many ranked documents from vector store for query',
+						action: 'Get ranked documents from vector store',
 					},
 					{
 						name: 'Insert Documents',
 						value: 'insert',
-						description: 'Insert documents into a vector store',
-						action: 'Insert documents into a vector store',
+						description: 'Insert documents into vector store',
+						action: 'Add documents to vector store',
 					},
 					{
-						name: 'Retrieve Documents (For Use With AI Nodes)',
+						name: 'Retrieve Documents (As Vector Store for Chain/Tool)',
 						value: 'retrieve',
-						description: 'Retrieve documents from a vector store to provide them to other AI nodes',
-						action: 'Retrieve documents for use with AI nodes',
+						description: 'Retrieve documents from vector store to be used as vector store with AI nodes',
+						action: 'Retrieve documents for Chain/Tool as Vector Store',
+						outputConnectionType: NodeConnectionTypes.AiVectorStore,
 					},
 					{
 						name: 'Retrieve Documents (As Tool for AI Agent)',
 						value: 'retrieve-as-tool',
-						description:
-							'Retrieve documents from a vector store to be used as a tool by an AI agent',
-						action: 'Retrieve documents as a tool for AI agents',
+						description: 'Retrieve documents from vector store to be used as tool with AI nodes',
+						action: 'Retrieve documents for AI Agent as Tool',
+						outputConnectionType: NodeConnectionTypes.AiTool,
 					},
 				],
 			},
@@ -459,6 +460,14 @@ export class VectorStoreHologres implements INodeType {
 			// ── Insert-specific fields ──
 			{
 				...dimensionsField,
+				displayOptions: { show: { mode: ['insert'] } },
+			},
+			{
+				displayName: 'Embedding Batch Size',
+				name: 'embeddingBatchSize',
+				type: 'number',
+				default: 10,
+				description: 'Number of documents to embed in a single batch. Reduce this if your embedding model has batch size limits.',
 				displayOptions: { show: { mode: ['insert'] } },
 			},
 			{
@@ -615,6 +624,7 @@ export class VectorStoreHologres implements INodeType {
 
 				const tableName = this.getNodeParameter('tableName', itemIndex, '') as string;
 				const dimensions = this.getNodeParameter('dimensions', itemIndex, 1536) as number;
+				const embeddingBatchSize = this.getNodeParameter('embeddingBatchSize', itemIndex, 10) as number;
 				const credentials = await this.getCredentials('hologresApi');
 				const pool = createPoolFromCredentials(credentials);
 				const columns = getColumnOptions(this);
@@ -634,13 +644,93 @@ export class VectorStoreHologres implements INodeType {
 					indexSettings,
 				};
 
-				const vectorStore = await HologresVectorStore.fromDocuments(
-					processedDocuments,
-					embeddings,
-					config,
-				);
-				vectorStore.client?.release();
-				await vectorStore.pool.end();
+				// Process documents in batches
+				const vectorStore = await HologresVectorStore.initialize(embeddings, config);
+				try {
+					for (let i = 0; i < processedDocuments.length; i += embeddingBatchSize) {
+						if (this.getExecutionCancelSignal()?.aborted) break;
+						const batch = processedDocuments.slice(i, i + embeddingBatchSize);
+						await vectorStore.addDocuments(batch);
+					}
+				} finally {
+					vectorStore.client?.release();
+					await vectorStore.pool.end();
+				}
+			}
+
+			return [resultData];
+		}
+
+		// ── Retrieve-as-Tool Mode (execute) ──
+		if (mode === 'retrieve-as-tool') {
+			const items = this.getInputData(0);
+			const resultData: INodeExecutionData[] = [];
+
+			for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+				if (this.getExecutionCancelSignal()?.aborted) break;
+
+				const tableName = this.getNodeParameter('tableName', itemIndex, '') as string;
+				const topK = this.getNodeParameter('topK', itemIndex, 4) as number;
+				const includeDocumentMetadata = this.getNodeParameter(
+					'includeDocumentMetadata',
+					itemIndex,
+					true,
+				) as boolean;
+				const filter = getMetadataFiltersValues(this, itemIndex);
+
+				const credentials = await this.getCredentials('hologresApi');
+				const pool = createPoolFromCredentials(credentials);
+				const columns = getColumnOptions(this);
+				const distanceMethod = this.getNodeParameter(
+					'options.distanceMethod',
+					0,
+					'Cosine',
+				) as DistanceMethod;
+
+				const config: HologresVectorStoreArgs = {
+					pool,
+					tableName,
+					dimensions: 0,
+					distanceMethod,
+					columns,
+					indexSettings: {
+						baseQuantizationType: 'rabitq',
+						useReorder: true,
+						maxDegree: 64,
+						efConstruction: 400,
+					},
+				};
+
+				const store = new HologresVectorStore(embeddings, config);
+				await store._initializeClient();
+
+				try {
+					// Get query from input item
+					const query = items[itemIndex].json?.chatInput as string ?? items[itemIndex].json?.query as string ?? '';
+					if (!query) {
+						throw new NodeOperationError(this.getNode(), 'No query found in input item. Expected "chatInput" or "query" field.');
+					}
+
+					const embeddedPrompt = await embeddings.embedQuery(query);
+					const docs = await store.similaritySearchVectorWithScore(
+						embeddedPrompt,
+						topK,
+						filter,
+					);
+
+					const serializedDocs = docs.map(([doc, score]) => {
+						const document = {
+							pageContent: doc.pageContent,
+							...(includeDocumentMetadata ? { metadata: doc.metadata } : {}),
+						};
+						return { json: { document, score }, pairedItem: { item: itemIndex } };
+					});
+
+					resultData.push(...serializedDocs);
+				} finally {
+					store.client?.release();
+					void store.pool.end();
+				}
 			}
 
 			return [resultData];
@@ -648,7 +738,7 @@ export class VectorStoreHologres implements INodeType {
 
 		throw new NodeOperationError(
 			this.getNode(),
-			`The operation mode "${mode}" is not supported in execute. Use "load" or "insert".`,
+			`The operation mode "${mode}" is not supported in execute. Use "load", "insert", or "retrieve-as-tool".`,
 		);
 	}
 

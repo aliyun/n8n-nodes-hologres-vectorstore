@@ -61,6 +61,7 @@ Configure Hologres connection information in n8n:
 | Table Name | Table name for storing vectors | n8n_hologres_vectors |
 | Dimensions | Vector dimensions (must match your embedding model output) | 1536 |
 | Distance Method | Distance calculation method | Cosine |
+| Embedding Batch Size | Number of documents to embed in a single batch | 10 |
 
 #### Distance Methods
 
@@ -96,7 +97,10 @@ Configure Hologres connection information in n8n:
 2. Connect an **Embedding** node (e.g., OpenAI Embeddings)
 3. Connect a **Document** node (providing documents to store)
 4. Configure table name and vector dimensions
-5. Run the workflow
+5. Optional: Adjust **Embedding Batch Size** if your embedding model has batch size limits
+6. Run the workflow
+
+> **Note:** Documents are processed in batches according to the Embedding Batch Size setting. This helps prevent timeout issues with large document sets or embedding models with strict batch limits.
 
 ### Retrieve Documents
 
@@ -111,6 +115,14 @@ Configure Hologres connection information in n8n:
 1. Select **Retrieve Documents (As Tool)** mode
 2. Configure the tool name and description
 3. Connect to an AI Agent node
+
+#### Execute Mode (Direct Query)
+
+When used in execute mode (with a Main input connection), the node expects the input item to contain either:
+- `chatInput` field - The query string
+- `query` field - Alternative query field
+
+This allows direct querying of the vector store without an AI Agent.
 
 ## Development
 
