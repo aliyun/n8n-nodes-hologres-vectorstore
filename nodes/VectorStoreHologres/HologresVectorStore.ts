@@ -321,6 +321,40 @@ export class HologresVectorStore extends VectorStore {
 		await this.pool.query(queryString, [params.ids]);
 	}
 
+	/**
+	 * Update a document by ID with new content and metadata.
+	 * This will re-embed the content and update the vector.
+	 */
+	async update(params: {
+		id: string;
+		document: Document;
+	}): Promise<void> {
+		const { idColumnName, contentColumnName, vectorColumnName, metadataColumnName } = this.columns;
+		const qTable = quoteIdentifier(this.tableName);
+		const qId = quoteIdentifier(idColumnName);
+		const qContent = quoteIdentifier(contentColumnName);
+		const qVector = quoteIdentifier(vectorColumnName);
+		const qMetadata = quoteIdentifier(metadataColumnName);
+
+		// Re-embed the content
+		const [vector] = await this.embeddings.embedDocuments([params.document.pageContent]);
+		const embeddingString = `{${vector.join(',')}}`;
+
+		const queryString = `
+			UPDATE ${qTable}
+			SET ${qContent} = $1,
+			    ${qVector} = $2::float4[],
+			    ${qMetadata} = $3::jsonb
+			WHERE ${qId} = $4
+		`;
+		await this.pool.query(queryString, [
+			params.document.pageContent,
+			embeddingString,
+			JSON.stringify(params.document.metadata),
+			params.id,
+		]);
+	}
+
 	static async fromDocuments(
 		docs: Document[],
 		embeddings: EmbeddingsInterface,

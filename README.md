@@ -9,6 +9,7 @@ A [n8n](https://n8n.io/) community node for using [Hologres](https://www.alibaba
 - **Multiple Operation Modes**:
   - **Get Many**: Retrieve top-ranked documents for a given query
   - **Insert Documents**: Insert documents into the vector store
+  - **Update Documents**: Update existing documents by ID
   - **Retrieve Documents**: Retrieve documents for use with other AI nodes
   - **Retrieve Documents (As Tool)**: Use as a retrieval tool for AI Agents
 - **Flexible Configuration**: Customize table names, column names, distance methods, and more
@@ -101,6 +102,17 @@ Configure Hologres connection information in n8n:
 6. Run the workflow
 
 > **Note:** Documents are processed in batches according to the Embedding Batch Size setting. This helps prevent timeout issues with large document sets or embedding models with strict batch limits.
+
+### Update Documents
+
+1. Select **Update Documents** mode
+2. Connect an **Embedding** node (for re-embedding the updated content)
+3. Connect a **Document** node (providing the updated document)
+4. Enter the **ID** of the document to update
+5. Configure table name and column names (if different from defaults)
+6. Run the workflow
+
+> **Note:** The update operation will re-embed the document content and update both the vector and metadata in the database.
 
 ### Retrieve Documents
 

@@ -371,11 +371,11 @@ export class VectorStoreHologres implements INodeType {
 					return inputs;
 				}
 
-				if (['insert', 'load'].includes(mode)) {
+				if (['insert', 'load', 'update'].includes(mode)) {
 					inputs.push({ displayName: "", type: "${NodeConnectionTypes.Main}"})
 				}
 
-				if (['insert'].includes(mode)) {
+				if (['insert', 'update'].includes(mode)) {
 					inputs.push({ displayName: "Document", type: "${NodeConnectionTypes.AiDocument}", required: true, maxConnections: 1})
 				}
 				return inputs
@@ -430,6 +430,12 @@ export class VectorStoreHologres implements INodeType {
 						action: 'Retrieve documents for AI Agent as Tool',
 						outputConnectionType: NodeConnectionTypes.AiTool,
 					},
+					{
+						name: 'Update Documents',
+						value: 'update',
+						description: 'Update documents in vector store by ID',
+						action: 'Update vector store documents',
+					},
 				],
 			},
 			// ── Retrieve-as-tool fields ──
@@ -478,6 +484,25 @@ export class VectorStoreHologres implements INodeType {
 				default: {},
 				displayOptions: { show: { mode: ['insert'] } },
 				options: [distanceMethodField, columnNamesField, hgraphIndexField],
+			},
+			// ── Update-specific fields ──
+			{
+				displayName: 'ID',
+				name: 'id',
+				type: 'string',
+				default: '',
+				required: true,
+				description: 'ID of the document to update',
+				displayOptions: { show: { mode: ['update'] } },
+			},
+			{
+				displayName: 'Options',
+				name: 'options',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				displayOptions: { show: { mode: ['update'] } },
+				options: [columnNamesField],
 			},
 			// ── Load-specific fields ──
 			{
@@ -736,9 +761,69 @@ export class VectorStoreHologres implements INodeType {
 			return [resultData];
 		}
 
+		// ── Update Mode ──
+		if (mode === 'update') {
+			const items = this.getInputData();
+			const documentInput = await this.getInputConnectionData(
+				NodeConnectionTypes.AiDocument,
+				0,
+			);
+			const resultData: INodeExecutionData[] = [];
+
+			for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+				if (this.getExecutionCancelSignal()?.aborted) break;
+
+				const { processedDocuments, serializedDocuments } = await processDocumentInput(
+					documentInput,
+					items[itemIndex],
+					itemIndex,
+				);
+
+				if (processedDocuments.length === 0) {
+					throw new NodeOperationError(this.getNode(), 'No document provided for update');
+				}
+
+				const id = this.getNodeParameter('id', itemIndex) as string;
+				const tableName = this.getNodeParameter('tableName', itemIndex, '') as string;
+				const credentials = await this.getCredentials('hologresApi');
+				const pool = createPoolFromCredentials(credentials);
+				const columns = getColumnOptions(this);
+
+				const config: HologresVectorStoreArgs = {
+					pool,
+					tableName,
+					dimensions: 0,
+					distanceMethod: 'Cosine',
+					columns,
+					indexSettings: {
+						baseQuantizationType: 'rabitq',
+						useReorder: true,
+						maxDegree: 64,
+						efConstruction: 400,
+					},
+				};
+
+				const store = new HologresVectorStore(embeddings, config);
+				await store._initializeClient();
+
+				try {
+					await store.update({
+						id,
+						document: processedDocuments[0],
+					});
+					resultData.push(...serializedDocuments);
+				} finally {
+					store.client?.release();
+					void store.pool.end();
+				}
+			}
+
+			return [resultData];
+		}
+
 		throw new NodeOperationError(
 			this.getNode(),
-			`The operation mode "${mode}" is not supported in execute. Use "load", "insert", or "retrieve-as-tool".`,
+			`The operation mode "${mode}" is not supported in execute. Use "load", "insert", "update", or "retrieve-as-tool".`,
 		);
 	}
 
