@@ -1,9 +1,11 @@
-import type { ICredentialType, INodeProperties } from 'n8n-workflow';
+import type { ICredentialType, INodeProperties, Icon } from 'n8n-workflow';
 
 export class HologresApi implements ICredentialType {
 	name = 'hologresApi';
 
 	displayName = 'Hologres';
+
+	icon: Icon = 'file:hologres.svg';
 
 	documentationUrl = 'https://www.alibabacloud.com/help/en/hologres/';
 
