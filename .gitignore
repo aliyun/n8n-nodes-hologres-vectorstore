@@ -1,0 +1,4 @@
+# Agent files
+.qoder/
+node_modules
+dist
