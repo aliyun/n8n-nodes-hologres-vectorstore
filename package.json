@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-hologres-vectorstore",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "n8n community node for Hologres Vector Store with HGraph index support",
 	"keywords": [
 		"n8n-community-node-package",
