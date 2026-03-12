@@ -12,15 +12,18 @@
 		"rag"
 	],
 	"license": "MIT",
-	"homepage": "",
+	"homepage": "https://github.com/aliyun/n8n-nodes-hologres-vectorstore#readme",
 	"author": {
 		"name": "TimothyDing"
 	},
 	"repository": {
 		"type": "git",
-		"url": ""
+		"url": "git+https://github.com/aliyun/n8n-nodes-hologres-vectorstore.git"
 	},
-	"main": "index.js",
+	"bugs": {
+		"url": "https://github.com/aliyun/n8n-nodes-hologres-vectorstore/issues"
+	},
+	"main": "dist/nodes/VectorStoreHologres/VectorStoreHologres.node.js",
 	"scripts": {
 		"build": "tsc && gulp build:icons",
 		"dev": "tsc --watch",
