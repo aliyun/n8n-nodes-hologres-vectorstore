@@ -145,14 +145,18 @@ npm install
 # Development mode (hot reload)
 npm run dev
 
-# Build
-npm run build
-
 # Code formatting
 npm run format
 
+# Build
+npm run build
+
 # Linting
 npm run lint
+
+# Publish
+npm publish --dry-run
+npm publish
 ```
 
 ## Tech Stack
