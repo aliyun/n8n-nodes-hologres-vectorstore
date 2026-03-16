@@ -218,14 +218,20 @@ __tests__/
 ├── mocks/
 │   ├── pg.mock.ts        # PostgreSQL client mocks
 │   ├── embeddings.mock.ts # Fake embeddings for testing
+│   ├── hologres-store.mock.ts # HologresVectorStore mocks
 │   └── n8n-context.mock.ts # n8n execution context mocks
 ├── unit/
 │   ├── HologresVectorStore.test.ts  # Core vector store tests
 │   └── helpers.test.ts              # Helper function tests
 └── integration/
     ├── setup.ts           # Integration test configuration
-    ├── HologresVectorStore.integration.test.ts  # Real DB tests
-    └── VectorStoreHologres.node.integration.test.ts  # Node tests
+    ├── HologresVectorStore.integration.test.ts  # Core DB operations
+    ├── VectorStoreHologres.node.integration.test.ts  # Node tests
+    ├── configurations.integration.test.ts  # Configuration tests
+    ├── edge-cases.integration.test.ts  # Edge case handling
+    ├── error-handling.integration.test.ts  # Error handling tests
+    ├── node-parameters.integration.test.ts  # Node parameter tests
+    └── performance.integration.test.ts  # Performance tests
 ```
 
 ### Coverage
@@ -247,7 +253,7 @@ Current test coverage:
 
 ## License
 
-MIT
+Apache-2.0
 
 ## Related Links
 

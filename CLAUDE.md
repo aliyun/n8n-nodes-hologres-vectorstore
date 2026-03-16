@@ -9,13 +9,23 @@ This is an n8n community node that provides Hologres vector database integration
 ## Commands
 
 ```bash
-npm install          # Install dependencies
-npm run build        # Compile TypeScript + copy SVG icons to dist/
-npm run dev          # Watch mode for development
-npm run format       # Format code with Prettier
-npm run lint         # Run ESLint
-npm run lintfix      # Auto-fix lint issues
-npm publish --dry-run # Verify what will be published
+npm install              # Install dependencies
+npm run build            # Compile TypeScript + copy SVG icons to dist/
+npm run dev              # Watch mode for development
+npm run format           # Format code with Prettier
+npm run lint             # Run ESLint
+npm run lintfix          # Auto-fix lint issues
+
+# Testing
+npm test                 # Run unit tests only
+npm run test:watch       # Watch mode for unit tests
+npm run test:coverage    # Generate coverage report
+npm run test:integration # Run integration tests (requires database)
+npm run test:all         # Run all tests
+
+# Publishing
+npm publish --dry-run    # Verify what will be published
+npm login && npm publish # Publish to npm
 ```
 
 ## Architecture
@@ -67,9 +77,44 @@ try {
 - SVG icons must be copied to `dist/` via gulp task
 - The `files: ["dist"]` field ensures only compiled code is published
 
+## Testing
+
+### Unit Tests
+
+Unit tests use mocked database connections (`__tests__/mocks/`) and run without a real Hologres instance. The `pg` module is globally mocked in `__tests__/setup.ts`.
+
+```bash
+npm test                 # Run unit tests
+npm run test:watch       # Watch mode
+npm run test:coverage    # With coverage
+```
+
+### Integration Tests
+
+Integration tests require a real Hologres database. Configure via `.env.test`:
+
+```bash
+HOLOGRES_HOST=your-instance.hologres.aliyuncs.com
+HOLOGRES_PORT=80
+HOLOGRES_DATABASE=your_database
+HOLOGRES_USER=your_user
+HOLOGRES_PASSWORD=your_password
+```
+
+Integration tests:
+- Use unique table names per test via `generateTestTableName()`
+- Clean up tables after completion
+- Skip automatically if database is not configured
+- Have 120s timeout for HGraph index builds
+
+```bash
+npm run test:integration # Run integration tests
+npm run test:all         # Run all tests
+```
+
 ## Publishing
 
-1. Update version in `package.json`
+1. Update version in `package.json` and `package-lock.json` (both top-level and `packages[""]`)
 2. Run `npm run build`
 3. Run `npm publish --dry-run` to verify
 4. Run `npm login` and `npm publish`
