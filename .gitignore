@@ -2,3 +2,7 @@
 .qoder/
 node_modules
 dist
+
+# Test environment
+.env.test
+coverage

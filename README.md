@@ -159,6 +159,86 @@ npm publish --dry-run
 npm publish
 ```
 
+## Testing
+
+This project includes both unit tests and integration tests.
+
+### Unit Tests
+
+Unit tests use mocked database connections and can run without a real Hologres instance.
+
+```bash
+# Run unit tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+
+# Run tests with coverage report
+npm run test:coverage
+```
+
+### Integration Tests
+
+Integration tests require a real Hologres database connection to test actual database operations.
+
+#### Setup
+
+1. Copy the example environment file:
+   ```bash
+   cp .env.test.example .env.test
+   ```
+
+2. Edit `.env.test` with your Hologres connection details:
+   ```bash
+   HOLOGRES_HOST=your-instance.hologres.aliyuncs.com
+   HOLOGRES_PORT=80
+   HOLOGRES_DATABASE=your_database
+   HOLOGRES_USER=your_user
+   HOLOGRES_PASSWORD=your_password
+   ```
+
+#### Run Integration Tests
+
+```bash
+# Run integration tests only
+npm run test:integration
+
+# Run all tests (unit + integration)
+npm run test:all
+```
+
+> **Note:** Integration tests will be automatically skipped if the database connection is not configured. This allows CI/CD pipelines to run unit tests without requiring a database.
+
+### Test Structure
+
+```
+__tests__/
+├── setup.ts              # Global mock setup for unit tests
+├── mocks/
+│   ├── pg.mock.ts        # PostgreSQL client mocks
+│   ├── embeddings.mock.ts # Fake embeddings for testing
+│   └── n8n-context.mock.ts # n8n execution context mocks
+├── unit/
+│   ├── HologresVectorStore.test.ts  # Core vector store tests
+│   └── helpers.test.ts              # Helper function tests
+└── integration/
+    ├── setup.ts           # Integration test configuration
+    ├── HologresVectorStore.integration.test.ts  # Real DB tests
+    └── VectorStoreHologres.node.integration.test.ts  # Node tests
+```
+
+### Coverage
+
+Current test coverage:
+
+| Metric | Coverage |
+|--------|----------|
+| Statements | 100% |
+| Branches | 96% |
+| Functions | 100% |
+| Lines | 100% |
+
 ## Tech Stack
 
 - [n8n-workflow](https://www.npmjs.com/package/n8n-workflow) - n8n workflow SDK
