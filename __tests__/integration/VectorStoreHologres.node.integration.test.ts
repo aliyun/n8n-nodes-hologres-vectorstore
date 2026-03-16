@@ -70,7 +70,8 @@ function createMockExecuteContext(overrides: Partial<MockExecuteContextOptions> 
       database: testConfig.database,
       user: testConfig.user,
       password: testConfig.password,
-      allowUnauthorizedCerts: true,
+      ssl: testConfig.ssl === 'disable' ? 'disable' : testConfig.ssl,
+      allowUnauthorizedCerts: testConfig.ssl === 'allow-unauthorized',
     }),
     getInputConnectionData: jest.fn().mockImplementation(async (type: string) => {
       if (type === 'ai_embedding') {

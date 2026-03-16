@@ -158,10 +158,8 @@ export class HologresVectorStore extends VectorStore {
 
     if (this.indexSettings.useReorder) {
       builderParams.use_reorder = true;
-      if (this.indexSettings.preciseQuantizationType) {
-        builderParams.precise_quantization_type =
-          this.indexSettings.preciseQuantizationType;
-      }
+      builderParams.precise_quantization_type =
+        this.indexSettings.preciseQuantizationType ?? "fp32";
       if (this.indexSettings.preciseIoType) {
         builderParams.precise_io_type = this.indexSettings.preciseIoType;
       }

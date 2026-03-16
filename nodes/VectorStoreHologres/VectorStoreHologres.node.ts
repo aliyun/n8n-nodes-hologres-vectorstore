@@ -22,7 +22,7 @@ import {
 
 // ─── Inline Helpers (from @n8n/ai-utilities, inlined for community node) ────
 
-function getMetadataFiltersValues(
+export function getMetadataFiltersValues(
   ctx: IExecuteFunctions | ISupplyDataFunctions,
   itemIndex: number,
 ): Record<string, string> | undefined {
@@ -52,7 +52,7 @@ function getMetadataFiltersValues(
   return undefined;
 }
 
-function getColumnOptions(context: {
+export function getColumnOptions(context: {
   getNodeParameter: (name: string, index: number, fallback: unknown) => unknown;
 }): ColumnOptions {
   return context.getNodeParameter("options.columnNames.values", 0, {
@@ -63,7 +63,7 @@ function getColumnOptions(context: {
   }) as ColumnOptions;
 }
 
-function getHGraphIndexSettings(context: {
+export function getHGraphIndexSettings(context: {
   getNodeParameter: (name: string, index: number, fallback: unknown) => unknown;
 }): HGraphIndexSettings {
   return context.getNodeParameter("options.hgraphIndex.values", 0, {
@@ -81,7 +81,7 @@ function getHGraphIndexSettings(context: {
  * Handles both raw Document arrays and loader objects (N8nJsonLoader/N8nBinaryLoader)
  * using duck typing to avoid importing internal n8n packages.
  */
-async function processDocumentInput(
+export async function processDocumentInput(
   documentInput: unknown,
   inputItem: INodeExecutionData,
   itemIndex: number,

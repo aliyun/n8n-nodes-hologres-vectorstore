@@ -10,31 +10,158 @@ import {
   getHGraphIndexSettings,
 } from '../../nodes/VectorStoreHologres/VectorStoreHologres.node';
 
-// Note: These functions are not exported in the original file.
-// For testing purposes, we need to either:
-// 1. Export them from the source file, or
-// 2. Test them indirectly through the node execute method
-
-// Since the helper functions are not exported, we'll test them through mock contexts
-// This test file demonstrates the expected behavior and can be used once functions are exported
-
 describe('Helper Functions', () => {
   describe('getMetadataFiltersValues', () => {
-    it.todo('should return undefined when no metadata options provided');
-    it.todo('should extract metadata values from fixedCollection');
-    it.todo('should parse JSON filter from searchFilterJson');
-    it.todo('should prefer metadata values over JSON filter');
+    const mockGetNodeParameter = jest.fn();
+
+    beforeEach(() => {
+      mockGetNodeParameter.mockReset();
+    });
+
+    it('should return undefined when no metadata options provided', () => {
+      mockGetNodeParameter.mockReturnValue({});
+      const ctx = {
+        getNodeParameter: mockGetNodeParameter,
+      } as any;
+      const result = getMetadataFiltersValues(ctx, 0);
+      expect(result).toBeUndefined();
+    });
+
+    it('should extract metadata values from fixedCollection', () => {
+      mockGetNodeParameter.mockImplementation((name: string) => {
+        if (name === 'options') {
+          return {
+            metadata: {
+              metadataValues: [
+                { name: 'category', value: 'electronics' },
+                { name: 'status', value: 'active' },
+              ],
+            },
+          };
+        }
+        return {};
+      });
+      const ctx = {
+        getNodeParameter: mockGetNodeParameter,
+      } as any;
+      const result = getMetadataFiltersValues(ctx, 0);
+      expect(result).toEqual({ category: 'electronics', status: 'active' });
+    });
+
+    it('should parse JSON filter from searchFilterJson', () => {
+      mockGetNodeParameter.mockImplementation((name: string, _index: number, fallback: unknown, options?: { ensureType?: string }) => {
+        if (name === 'options') {
+          return { searchFilterJson: { category: 'books' } };
+        }
+        if (name === 'options.searchFilterJson') {
+          return { category: 'books' };
+        }
+        return fallback;
+      });
+      const ctx = {
+        getNodeParameter: mockGetNodeParameter,
+      } as any;
+      const result = getMetadataFiltersValues(ctx, 0);
+      expect(result).toEqual({ category: 'books' });
+    });
+
+    it('should prefer metadata values over JSON filter', () => {
+      mockGetNodeParameter.mockImplementation((name: string, _index: number, fallback: unknown, _options?: { ensureType?: string }) => {
+        if (name === 'options') {
+          return {
+            metadata: {
+              metadataValues: [{ name: 'type', value: 'premium' }],
+            },
+            searchFilterJson: { category: 'books' },
+          };
+        }
+        return fallback;
+      });
+      const ctx = {
+        getNodeParameter: mockGetNodeParameter,
+      } as any;
+      const result = getMetadataFiltersValues(ctx, 0);
+      expect(result).toEqual({ type: 'premium' });
+    });
   });
 
   describe('getColumnOptions', () => {
-    it.todo('should return default column names when not specified');
-    it.todo('should return custom column names from parameters');
+    it('should return default column names when not specified', () => {
+      const mockGetNodeParameter = jest.fn().mockReturnValue({
+        idColumnName: 'id',
+        vectorColumnName: 'embedding',
+        contentColumnName: 'text',
+        metadataColumnName: 'metadata',
+      });
+      const result = getColumnOptions({ getNodeParameter: mockGetNodeParameter });
+      expect(result).toEqual({
+        idColumnName: 'id',
+        vectorColumnName: 'embedding',
+        contentColumnName: 'text',
+        metadataColumnName: 'metadata',
+      });
+    });
+
+    it('should return custom column names from parameters', () => {
+      const mockGetNodeParameter = jest.fn().mockReturnValue({
+        idColumnName: 'doc_id',
+        vectorColumnName: 'vec',
+        contentColumnName: 'content',
+        metadataColumnName: 'meta',
+      });
+      const result = getColumnOptions({ getNodeParameter: mockGetNodeParameter });
+      expect(result.idColumnName).toBe('doc_id');
+      expect(result.vectorColumnName).toBe('vec');
+    });
   });
 
   describe('getHGraphIndexSettings', () => {
-    it.todo('should return default settings when not specified');
-    it.todo('should return custom settings from parameters');
-    it.todo('should include all required index parameters');
+    it('should return default settings when not specified', () => {
+      const mockGetNodeParameter = jest.fn().mockReturnValue({
+        baseQuantizationType: 'rabitq',
+        useReorder: true,
+        preciseQuantizationType: 'fp32',
+        preciseIoType: 'block_memory_io',
+        maxDegree: 64,
+        efConstruction: 400,
+      });
+      const result = getHGraphIndexSettings({ getNodeParameter: mockGetNodeParameter });
+      expect(result.baseQuantizationType).toBe('rabitq');
+      expect(result.useReorder).toBe(true);
+      expect(result.maxDegree).toBe(64);
+      expect(result.efConstruction).toBe(400);
+    });
+
+    it('should return custom settings from parameters', () => {
+      const mockGetNodeParameter = jest.fn().mockReturnValue({
+        baseQuantizationType: 'sq8',
+        useReorder: false,
+        preciseQuantizationType: 'fp32',
+        preciseIoType: 'block_memory_io',
+        maxDegree: 48,
+        efConstruction: 300,
+      });
+      const result = getHGraphIndexSettings({ getNodeParameter: mockGetNodeParameter });
+      expect(result.baseQuantizationType).toBe('sq8');
+      expect(result.useReorder).toBe(false);
+      expect(result.maxDegree).toBe(48);
+    });
+
+    it('should include all required index parameters', () => {
+      const mockGetNodeParameter = jest.fn().mockReturnValue({
+        baseQuantizationType: 'fp16',
+        useReorder: true,
+        preciseQuantizationType: 'fp32',
+        preciseIoType: 'reader_io',
+        maxDegree: 96,
+        efConstruction: 600,
+      });
+      const result = getHGraphIndexSettings({ getNodeParameter: mockGetNodeParameter });
+      expect(result).toHaveProperty('baseQuantizationType');
+      expect(result).toHaveProperty('useReorder');
+      expect(result).toHaveProperty('maxDegree');
+      expect(result).toHaveProperty('efConstruction');
+    });
   });
 });
 

@@ -32,7 +32,20 @@ export function createMockExecuteContext(
 
   const mockContext = {
     getNode: jest.fn().mockReturnValue(mockNode),
-    getNodeParameter: jest.fn((name: string, _index: number, fallback?: unknown) => {
+    getNodeParameter: jest.fn((name: string, _index: number, fallback?: unknown, options?: { ensureType?: string; extractValue?: boolean }) => {
+      // Support nested parameter paths like "options.distanceMethod"
+      if (name.includes('.')) {
+        const parts = name.split('.');
+        let value: unknown = params;
+        for (const part of parts) {
+          if (value && typeof value === 'object' && part in value) {
+            value = (value as Record<string, unknown>)[part];
+          } else {
+            return fallback;
+          }
+        }
+        return value;
+      }
       if (name in params) {
         return params[name];
       }
@@ -76,7 +89,20 @@ export function createMockSupplyDataContext(
 
   return {
     getNode: jest.fn().mockReturnValue(mockNode),
-    getNodeParameter: jest.fn((name: string, _index: number, fallback?: unknown) => {
+    getNodeParameter: jest.fn((name: string, _index: number, fallback?: unknown, options?: { ensureType?: string; extractValue?: boolean }) => {
+      // Support nested parameter paths like "options.distanceMethod"
+      if (name.includes('.')) {
+        const parts = name.split('.');
+        let value: unknown = params;
+        for (const part of parts) {
+          if (value && typeof value === 'object' && part in value) {
+            value = (value as Record<string, unknown>)[part];
+          } else {
+            return fallback;
+          }
+        }
+        return value;
+      }
       if (name in params) {
         return params[name];
       }

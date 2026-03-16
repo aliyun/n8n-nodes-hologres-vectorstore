@@ -24,6 +24,7 @@ export const testConfig = {
   database: process.env.HOLOGRES_DATABASE || '',
   user: process.env.HOLOGRES_USER || '',
   password: process.env.HOLOGRES_PASSWORD || '',
+  ssl: process.env.HOLOGRES_SSL || 'disable',
 };
 
 /**
@@ -42,6 +43,15 @@ export const skipReason = 'HOLOGRES_* environment variables not set. Skip integr
  * Create a test connection pool
  */
 export function createTestPool(): pg.Pool {
+  // SSL configuration matching main code logic
+  let ssl: boolean | { rejectUnauthorized: boolean } = false;
+  if (testConfig.ssl === 'require') {
+    ssl = true;
+  } else if (testConfig.ssl === 'allow-unauthorized') {
+    ssl = { rejectUnauthorized: false };
+  }
+  // 'disable' or other values -> ssl = false (default)
+
   return new pg.Pool({
     host: testConfig.host,
     port: testConfig.port,
@@ -49,7 +59,7 @@ export function createTestPool(): pg.Pool {
     user: testConfig.user,
     password: testConfig.password,
     max: 5,
-    ssl: { rejectUnauthorized: false },
+    ssl,
   });
 }
 

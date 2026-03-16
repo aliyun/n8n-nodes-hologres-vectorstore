@@ -22,8 +22,8 @@ module.exports = {
       },
     ],
   },
-  // Longer timeout for database operations
-  testTimeout: 30000,
+  // Longer timeout for database operations (120s for remote DB, HGraph index builds)
+  testTimeout: 120000,
   // Run tests sequentially to avoid database conflicts
   maxConcurrency: 1,
 };
