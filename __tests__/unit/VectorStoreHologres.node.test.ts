@@ -22,6 +22,7 @@ import { FakeEmbeddings } from '../mocks/embeddings.mock';
 import {
   createMockHologresVectorStore,
   createMockInitialize,
+  createMockPool,
 } from '../mocks/hologres-store.mock';
 
 // Mock HologresVectorStore module
@@ -30,6 +31,7 @@ jest.mock('../../nodes/VectorStoreHologres/HologresVectorStore', () => {
   return {
     ...actual,
     HologresVectorStore: jest.fn().mockImplementation(() => createMockHologresVectorStore()),
+    createPoolFromCredentials: jest.fn().mockImplementation(() => createMockPool()),
   };
 });
 
@@ -253,7 +255,7 @@ describe('execute() - load mode', () => {
     expect(mockStore._initializeClient).toHaveBeenCalled();
     expect(mockStore.similaritySearchVectorWithScore).toHaveBeenCalled();
     expect(mockStore.client.release).toHaveBeenCalled();
-    expect(mockStore.pool.end).toHaveBeenCalled();
+    // Pool is now managed externally and closed once at the end
     expect(result[0]).toHaveLength(2);
   });
 
@@ -357,9 +359,8 @@ describe('execute() - load mode', () => {
 
     await expect(node.execute.call(context)).rejects.toThrow('Query failed');
 
-    // Still should cleanup
+    // Still should cleanup client
     expect(mockStore.client.release).toHaveBeenCalled();
-    expect(mockStore.pool.end).toHaveBeenCalled();
   });
 });
 
@@ -415,7 +416,7 @@ describe('execute() - insert mode', () => {
     expect(MockHologresVectorStore.initialize).toHaveBeenCalled();
     expect(mockStore.addDocuments).toHaveBeenCalled();
     expect(mockStore.client.release).toHaveBeenCalled();
-    expect(mockStore.pool.end).toHaveBeenCalled();
+    // Pool is now managed externally
     expect(result[0]).toHaveLength(1);
   });
 
@@ -569,7 +570,6 @@ describe('execute() - insert mode', () => {
     await expect(node.execute.call(context)).rejects.toThrow('Insert failed');
 
     expect(mockStore.client.release).toHaveBeenCalled();
-    expect(mockStore.pool.end).toHaveBeenCalled();
   });
 });
 
@@ -626,7 +626,7 @@ describe('execute() - update mode', () => {
       document: documents[0],
     });
     expect(mockStore.client.release).toHaveBeenCalled();
-    expect(mockStore.pool.end).toHaveBeenCalled();
+    // Pool is now managed externally
     expect(result[0]).toHaveLength(1);
   });
 
@@ -691,7 +691,6 @@ describe('execute() - update mode', () => {
     await expect(node.execute.call(context)).rejects.toThrow('Update failed');
 
     expect(mockStore.client.release).toHaveBeenCalled();
-    expect(mockStore.pool.end).toHaveBeenCalled();
   });
 
   it('should respect abort signal in loop', async () => {
@@ -875,7 +874,6 @@ describe('execute() - retrieve-as-tool mode', () => {
     await expect(node.execute.call(context)).rejects.toThrow('Search failed');
 
     expect(mockStore.client.release).toHaveBeenCalled();
-    expect(mockStore.pool.end).toHaveBeenCalled();
   });
 
   it('should exclude metadata when flag is false', async () => {
@@ -960,10 +958,9 @@ describe('supplyData() - retrieve mode', () => {
     expect(result.closeFunction).toBeDefined();
     expect(mockStore._initializeClient).toHaveBeenCalled();
 
-    // Test closeFunction
+    // Test closeFunction - now calls store.close()
     await result.closeFunction!();
-    expect(mockStore.client.release).toHaveBeenCalled();
-    expect(mockStore.pool.end).toHaveBeenCalled();
+    expect(mockStore.close).toHaveBeenCalled();
   });
 
   it('should pass filter to config', async () => {
@@ -1087,7 +1084,7 @@ describe('supplyData() - retrieve-as-tool mode', () => {
     await result.response.func('test query');
 
     expect(mockStore.client.release).toHaveBeenCalled();
-    expect(mockStore.pool.end).toHaveBeenCalled();
+    // Pool is now managed externally via closeFunction
   });
 
   it('should exclude metadata when flag is false', async () => {

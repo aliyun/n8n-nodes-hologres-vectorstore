@@ -30,6 +30,8 @@
 		"format": "prettier nodes credentials --write",
 		"lint": "eslint nodes credentials package.json",
 		"lintfix": "eslint nodes credentials package.json --fix",
+		"preversion": "npm run lint && npm run build",
+		"version": "npm run build && git add -A",
 		"prepublishOnly": "npm run build",
 		"test": "jest",
 		"test:watch": "jest --watch",

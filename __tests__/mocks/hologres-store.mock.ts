@@ -11,6 +11,7 @@ export interface MockHologresVectorStore {
   similaritySearchVectorWithScore: jest.Mock;
   addDocuments: jest.Mock;
   update: jest.Mock;
+  close: jest.Mock;
   client: { release: jest.Mock };
   pool: { end: jest.Mock };
 }
@@ -27,6 +28,7 @@ export function createMockHologresVectorStore(): MockHologresVectorStore {
     ]),
     addDocuments: jest.fn().mockResolvedValue(['id-1', 'id-2']),
     update: jest.fn().mockResolvedValue(undefined),
+    close: jest.fn().mockResolvedValue(undefined),
     client: { release: jest.fn() },
     pool: { end: jest.fn().mockResolvedValue(undefined) },
   };
@@ -39,4 +41,13 @@ export function createMockInitialize(
   mockStore: MockHologresVectorStore,
 ): jest.Mock {
   return jest.fn().mockResolvedValue(mockStore);
+}
+
+/**
+ * Create a mock pg.Pool instance
+ */
+export function createMockPool(): { end: jest.Mock } {
+  return {
+    end: jest.fn().mockResolvedValue(undefined),
+  };
 }

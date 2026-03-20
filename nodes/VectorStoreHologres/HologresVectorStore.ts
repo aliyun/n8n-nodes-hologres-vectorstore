@@ -21,6 +21,14 @@ export function quoteIdentifier(name: string): string {
   return `"${name}"`;
 }
 
+/**
+ * Converts a numeric vector to PostgreSQL array literal format.
+ * Example: [1.0, 2.0, 3.0] -> "{1,2,3}"
+ */
+export function vectorToPostgresArray(vector: number[]): string {
+  return `{${vector.join(",")}}`;
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type DistanceMethod = "Cosine" | "InnerProduct" | "Euclidean";
@@ -41,6 +49,18 @@ export type HGraphIndexSettings = {
   efConstruction: number;
 };
 
+/** Typed credentials for Hologres connection */
+export interface HologresCredentials {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+  maxConnections?: number;
+  ssl?: "disable" | "allow" | "require";
+  allowUnauthorizedCerts?: boolean;
+}
+
 export interface HologresVectorStoreArgs {
   pool: pg.Pool;
   tableName: string;
@@ -51,10 +71,50 @@ export interface HologresVectorStoreArgs {
   filter?: Record<string, unknown>;
 }
 
+// ─── Default Values ───────────────────────────────────────────────────────────
+
+export const DEFAULT_COLUMN_OPTIONS: ColumnOptions = {
+  idColumnName: "id",
+  vectorColumnName: "embedding",
+  contentColumnName: "text",
+  metadataColumnName: "metadata",
+};
+
+export const DEFAULT_HGRAPH_INDEX_SETTINGS: HGraphIndexSettings = {
+  baseQuantizationType: "rabitq",
+  useReorder: true,
+  preciseQuantizationType: "fp32",
+  preciseIoType: "block_memory_io",
+  maxDegree: 64,
+  efConstruction: 400,
+};
+
+/** Minimal index settings for read-only operations (load, update, retrieve) */
+export const MINIMAL_HGRAPH_INDEX_SETTINGS: Omit<
+  HGraphIndexSettings,
+  "preciseQuantizationType" | "preciseIoType"
+> = {
+  baseQuantizationType: "rabitq",
+  useReorder: true,
+  maxDegree: 64,
+  efConstruction: 400,
+};
+
+// ─── Distance Function Mapping ────────────────────────────────────────────────
+
+const DISTANCE_FUNCTION_MAP: Record<
+  DistanceMethod,
+  { func: string; order: string }
+> = {
+  Cosine: { func: "approx_cosine_distance", order: "DESC" },
+  InnerProduct: { func: "approx_inner_product_distance", order: "DESC" },
+  Euclidean: { func: "approx_euclidean_distance", order: "ASC" },
+};
+
 // ─── Helper Functions ────────────────────────────────────────────────────────
 
 export function createPoolFromCredentials(
-  credentials: Record<string, unknown>,
+  credentials: HologresCredentials,
 ): pg.Pool {
   let ssl: boolean | { rejectUnauthorized: boolean } = false;
   if (credentials.allowUnauthorizedCerts === true) {
@@ -64,12 +124,12 @@ export function createPoolFromCredentials(
   }
 
   return new pg.Pool({
-    host: credentials.host as string,
-    port: credentials.port as number,
-    database: credentials.database as string,
-    user: credentials.user as string,
-    password: credentials.password as string,
-    max: (credentials.maxConnections as number) ?? 100,
+    host: credentials.host,
+    port: credentials.port,
+    database: credentials.database,
+    user: credentials.user,
+    password: credentials.password,
+    max: credentials.maxConnections ?? 100,
     ssl,
     application_name: "n8n_hologres_vector_store",
   });
@@ -80,9 +140,9 @@ export function createPoolFromCredentials(
 export class HologresVectorStore extends VectorStore {
   declare FilterType: Record<string, unknown>;
 
-  pool: pg.Pool;
+  private _pool: pg.Pool;
 
-  client?: pg.PoolClient;
+  private _client?: pg.PoolClient;
 
   tableName: string;
 
@@ -96,13 +156,23 @@ export class HologresVectorStore extends VectorStore {
 
   filter?: Record<string, unknown>;
 
+  /** Expose pool for backward compatibility (deprecated: use close() instead) */
+  get pool(): pg.Pool {
+    return this._pool;
+  }
+
+  /** Expose client for backward compatibility (deprecated: use close() instead) */
+  get client(): pg.PoolClient | undefined {
+    return this._client;
+  }
+
   _vectorstoreType(): string {
     return "hologres";
   }
 
   constructor(embeddings: EmbeddingsInterface, args: HologresVectorStoreArgs) {
     super(embeddings, args);
-    this.pool = args.pool;
+    this._pool = args.pool;
     this.tableName = args.tableName;
     this.dimensions = args.dimensions;
     this.distanceMethod = args.distanceMethod;
@@ -112,7 +182,32 @@ export class HologresVectorStore extends VectorStore {
   }
 
   async _initializeClient(): Promise<void> {
-    this.client = await this.pool.connect();
+    this._client = await this._pool.connect();
+  }
+
+  /** Release client and close pool */
+  async close(): Promise<void> {
+    this._client?.release();
+    await this._pool.end();
+  }
+
+  /** Get quoted identifiers for all columns and table */
+  getQuotedIdentifiers(): {
+    table: string;
+    id: string;
+    content: string;
+    metadata: string;
+    vector: string;
+  } {
+    const { idColumnName, contentColumnName, metadataColumnName, vectorColumnName } =
+      this.columns;
+    return {
+      table: quoteIdentifier(this.tableName),
+      id: quoteIdentifier(idColumnName),
+      content: quoteIdentifier(contentColumnName),
+      metadata: quoteIdentifier(metadataColumnName),
+      vector: quoteIdentifier(vectorColumnName),
+    };
   }
 
   /**
@@ -120,29 +215,19 @@ export class HologresVectorStore extends VectorStore {
    * float4[] + CHECK constraint for vector columns.
    */
   async ensureTableInDatabase(): Promise<void> {
-    const {
-      idColumnName,
-      contentColumnName,
-      metadataColumnName,
-      vectorColumnName,
-    } = this.columns;
-    const qTable = quoteIdentifier(this.tableName);
-    const qId = quoteIdentifier(idColumnName);
-    const qContent = quoteIdentifier(contentColumnName);
-    const qMetadata = quoteIdentifier(metadataColumnName);
-    const qVector = quoteIdentifier(vectorColumnName);
+    const { table, id, content, metadata, vector } = this.getQuotedIdentifiers();
     const tableQuery = `
-			CREATE TABLE IF NOT EXISTS ${qTable} (
-				${qId} text NOT NULL PRIMARY KEY,
-				${qContent} text,
-				${qMetadata} jsonb,
-				${qVector} float4[] CHECK (
-					array_ndims(${qVector}) = 1
-					AND array_length(${qVector}, 1) = ${Number(this.dimensions)}
+			CREATE TABLE IF NOT EXISTS ${table} (
+				${id} text NOT NULL PRIMARY KEY,
+				${content} text,
+				${metadata} jsonb,
+				${vector} float4[] CHECK (
+					array_ndims(${vector}) = 1
+					AND array_length(${vector}, 1) = ${Number(this.dimensions)}
 				)
 			);
 		`;
-    await this.pool.query(tableQuery);
+    await this._pool.query(tableQuery);
   }
 
   /**
@@ -173,9 +258,9 @@ export class HologresVectorStore extends VectorStore {
       },
     });
 
-    const qTable = quoteIdentifier(this.tableName);
-    const alterQuery = `ALTER TABLE ${qTable} SET (vectors = '${vectorsConfig}');`;
-    await this.pool.query(alterQuery);
+    const { table } = this.getQuotedIdentifiers();
+    const alterQuery = `ALTER TABLE ${table} SET (vectors = '${vectorsConfig}');`;
+    await this._pool.query(alterQuery);
   }
 
   static async initialize(
@@ -203,34 +288,29 @@ export class HologresVectorStore extends VectorStore {
     documents: Document[],
     options?: { ids?: string[] },
   ): Promise<string[]> {
-    const ids = options?.ids ?? vectors.map(() => crypto.randomUUID());
-    const {
-      idColumnName,
-      contentColumnName,
-      vectorColumnName,
-      metadataColumnName,
-    } = this.columns;
-    const qTable = quoteIdentifier(this.tableName);
-    const qId = quoteIdentifier(idColumnName);
-    const qContent = quoteIdentifier(contentColumnName);
-    const qVector = quoteIdentifier(vectorColumnName);
-    const qMetadata = quoteIdentifier(metadataColumnName);
+    if (vectors.length === 0) return [];
 
-    for (let i = 0; i < vectors.length; i++) {
-      const embeddingString = `{${vectors[i].join(",")}}`;
-      const queryText = `
-				INSERT INTO ${qTable}(
-					${qId}, ${qContent}, ${qVector}, ${qMetadata}
-				)
-				VALUES ($1, $2, $3::float4[], $4::jsonb)
-			`;
-      await this.pool.query(queryText, [
-        ids[i],
-        documents[i].pageContent,
-        embeddingString,
-        JSON.stringify(documents[i].metadata),
-      ]);
-    }
+    const ids = options?.ids ?? vectors.map(() => crypto.randomUUID());
+    const { table, id, content, vector, metadata } = this.getQuotedIdentifiers();
+
+    // Use multi-row INSERT for efficiency
+    const valuePlaceholders = vectors
+      .map((_, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}::float4[], $${i * 4 + 4}::jsonb)`)
+      .join(", ");
+
+    const queryText = `
+			INSERT INTO ${table}(${id}, ${content}, ${vector}, ${metadata})
+			VALUES ${valuePlaceholders}
+		`;
+
+    const params = vectors.flatMap((v, i) => [
+      ids[i],
+      documents[i].pageContent,
+      vectorToPostgresArray(v),
+      JSON.stringify(documents[i].metadata),
+    ]);
+
+    await this._pool.query(queryText, params);
     return ids;
   }
 
@@ -239,16 +319,7 @@ export class HologresVectorStore extends VectorStore {
    * for the configured distance method.
    */
   private getDistanceFunctionAndOrder(): { func: string; order: string } {
-    switch (this.distanceMethod) {
-      case "Cosine":
-        return { func: "approx_cosine_distance", order: "DESC" };
-      case "InnerProduct":
-        return { func: "approx_inner_product_distance", order: "DESC" };
-      case "Euclidean":
-        return { func: "approx_euclidean_distance", order: "ASC" };
-      default:
-        return { func: "approx_cosine_distance", order: "DESC" };
-    }
+    return DISTANCE_FUNCTION_MAP[this.distanceMethod] ?? DISTANCE_FUNCTION_MAP.Cosine;
   }
 
   /**
@@ -283,8 +354,8 @@ export class HologresVectorStore extends VectorStore {
     filter?: Record<string, unknown>,
   ): Promise<[Document, number][]> {
     const { func, order } = this.getDistanceFunctionAndOrder();
-    const { vectorColumnName } = this.columns;
-    const embeddingString = `{${query.join(",")}}`;
+    const { table, vector } = this.getQuotedIdentifiers();
+    const embeddingString = vectorToPostgresArray(query);
 
     const mergedFilter = { ...this.filter, ...filter };
     const baseParams: unknown[] = [embeddingString, k];
@@ -300,17 +371,15 @@ export class HologresVectorStore extends VectorStore {
       whereClause = `WHERE ${whereClauses.join(" AND ")}`;
     }
 
-    const qVector = quoteIdentifier(vectorColumnName);
-    const qTable = quoteIdentifier(this.tableName);
     const queryString = `
-			SELECT *, ${func}(${qVector}, $1::float4[]) AS "_distance"
-			FROM ${qTable}
+			SELECT *, ${func}(${vector}, $1::float4[]) AS "_distance"
+			FROM ${table}
 			${whereClause}
 			ORDER BY "_distance" ${order}
 			LIMIT $2
 		`;
 
-    const result = await this.pool.query(queryString, baseParams);
+    const result = await this._pool.query(queryString, baseParams);
     const results: [Document, number][] = [];
 
     for (const row of result.rows) {
@@ -333,14 +402,12 @@ export class HologresVectorStore extends VectorStore {
   }
 
   async delete(params: { ids: string[] }): Promise<void> {
-    const { idColumnName } = this.columns;
-    const qTable = quoteIdentifier(this.tableName);
-    const qId = quoteIdentifier(idColumnName);
+    const { table, id } = this.getQuotedIdentifiers();
     const queryString = `
-			DELETE FROM ${qTable}
-			WHERE ${qId} = ANY($1::text[])
+			DELETE FROM ${table}
+			WHERE ${id} = ANY($1::text[])
 		`;
-    await this.pool.query(queryString, [params.ids]);
+    await this._pool.query(queryString, [params.ids]);
   }
 
   /**
@@ -348,32 +415,22 @@ export class HologresVectorStore extends VectorStore {
    * This will re-embed the content and update the vector.
    */
   async update(params: { id: string; document: Document }): Promise<void> {
-    const {
-      idColumnName,
-      contentColumnName,
-      vectorColumnName,
-      metadataColumnName,
-    } = this.columns;
-    const qTable = quoteIdentifier(this.tableName);
-    const qId = quoteIdentifier(idColumnName);
-    const qContent = quoteIdentifier(contentColumnName);
-    const qVector = quoteIdentifier(vectorColumnName);
-    const qMetadata = quoteIdentifier(metadataColumnName);
+    const { table, id, content, vector, metadata } = this.getQuotedIdentifiers();
 
     // Re-embed the content
-    const [vector] = await this.embeddings.embedDocuments([
+    const [vec] = await this.embeddings.embedDocuments([
       params.document.pageContent,
     ]);
-    const embeddingString = `{${vector.join(",")}}`;
+    const embeddingString = vectorToPostgresArray(vec);
 
     const queryString = `
-			UPDATE ${qTable}
-			SET ${qContent} = $1,
-			    ${qVector} = $2::float4[],
-			    ${qMetadata} = $3::jsonb
-			WHERE ${qId} = $4
+			UPDATE ${table}
+			SET ${content} = $1,
+			    ${vector} = $2::float4[],
+			    ${metadata} = $3::jsonb
+			WHERE ${id} = $4
 		`;
-    await this.pool.query(queryString, [
+    await this._pool.query(queryString, [
       params.document.pageContent,
       embeddingString,
       JSON.stringify(params.document.metadata),

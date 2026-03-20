@@ -148,16 +148,32 @@ npm run dev
 # Code formatting
 npm run format
 
-# Build
-npm run build
-
 # Linting
 npm run lint
 
+# Build
+npm run build
+```
+
+## Publishing
+
+```bash
+# Update version (automatically runs lint + build twice)
+# For patch releases (bug fixes)
+npm version patch
+
+# For minor releases (new features, backward compatible)
+npm version minor
+
+# For major releases (breaking changes)
+npm version major
+
 # Publish
-npm publish --dry-run
+npm publish --dry-run  # Test publish first
 npm publish
 ```
+
+> **Note:** `npm version` will automatically run `npm run lint && npm run build` before updating the version, then run `npm run build` again after to ensure the build artifacts contain the new version number.
 
 ## Testing
 

@@ -387,7 +387,11 @@ describe('P1: HologresVectorStore', () => {
 
       await store.addVectors(vectors, documents);
 
-      expect(mockPool.query).toHaveBeenCalledTimes(2);
+      // Batch insert uses a single query for multiple vectors
+      expect(mockPool.query).toHaveBeenCalledTimes(1);
+      const call = (mockPool.query as jest.Mock).mock.calls[0];
+      // Should have 8 parameters (4 per vector: id, content, vector, metadata)
+      expect(call[1]).toHaveLength(8);
     });
 
     it('should quote custom column names in SQL', async () => {

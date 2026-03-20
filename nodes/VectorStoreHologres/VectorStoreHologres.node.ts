@@ -11,16 +11,32 @@ import { NodeConnectionTypes, NodeOperationError } from "n8n-workflow";
 import type { Embeddings } from "@langchain/core/embeddings";
 import type { Document } from "@langchain/core/documents";
 import { DynamicTool } from "@langchain/core/tools";
+import pg from "pg";
 import {
   HologresVectorStore,
   createPoolFromCredentials,
+  MINIMAL_HGRAPH_INDEX_SETTINGS,
+  DEFAULT_COLUMN_OPTIONS,
   type DistanceMethod,
   type ColumnOptions,
   type HGraphIndexSettings,
   type HologresVectorStoreArgs,
+  type HologresCredentials,
 } from "./HologresVectorStore";
 
-// ─── Inline Helpers (from @n8n/ai-utilities, inlined for community node) ────
+// ─── Mode Constants ───────────────────────────────────────────────────────────
+
+const MODE = {
+  LOAD: "load",
+  INSERT: "insert",
+  UPDATE: "update",
+  RETRIEVE: "retrieve",
+  RETRIEVE_AS_TOOL: "retrieve-as-tool",
+} as const;
+
+type Mode = (typeof MODE)[keyof typeof MODE];
+
+// ─── Helper Functions (exported for testing) ───────────────────────────────────
 
 export function getMetadataFiltersValues(
   ctx: IExecuteFunctions | ISupplyDataFunctions,
@@ -55,32 +71,74 @@ export function getMetadataFiltersValues(
 export function getColumnOptions(context: {
   getNodeParameter: (name: string, index: number, fallback: unknown) => unknown;
 }): ColumnOptions {
-  return context.getNodeParameter("options.columnNames.values", 0, {
-    idColumnName: "id",
-    vectorColumnName: "embedding",
-    contentColumnName: "text",
-    metadataColumnName: "metadata",
-  }) as ColumnOptions;
+  return context.getNodeParameter(
+    "options.columnNames.values",
+    0,
+    DEFAULT_COLUMN_OPTIONS,
+  ) as ColumnOptions;
 }
 
 export function getHGraphIndexSettings(context: {
   getNodeParameter: (name: string, index: number, fallback: unknown) => unknown;
 }): HGraphIndexSettings {
-  return context.getNodeParameter("options.hgraphIndex.values", 0, {
-    baseQuantizationType: "rabitq",
-    useReorder: true,
-    preciseQuantizationType: "fp32",
-    preciseIoType: "block_memory_io",
-    maxDegree: 64,
-    efConstruction: 400,
-  }) as HGraphIndexSettings;
+  return context.getNodeParameter(
+    "options.hgraphIndex.values",
+    0,
+    MINIMAL_HGRAPH_INDEX_SETTINGS,
+  ) as HGraphIndexSettings;
 }
 
-/**
- * Process document input from the AI Document connection.
- * Handles both raw Document arrays and loader objects (N8nJsonLoader/N8nBinaryLoader)
- * using duck typing to avoid importing internal n8n packages.
- */
+function getDistanceMethod(context: {
+  getNodeParameter: (name: string, index: number, fallback: unknown) => unknown;
+}): DistanceMethod {
+  return context.getNodeParameter(
+    "options.distanceMethod",
+    0,
+    "Cosine",
+  ) as DistanceMethod;
+}
+
+/** Build HologresVectorStoreArgs with common defaults */
+function createStoreConfig(
+  pool: pg.Pool,
+  tableName: string,
+  options: {
+    dimensions?: number;
+    columns: ColumnOptions;
+    distanceMethod: DistanceMethod;
+    indexSettings?: HGraphIndexSettings;
+    filter?: Record<string, unknown>;
+  },
+): HologresVectorStoreArgs {
+  return {
+    pool,
+    tableName,
+    dimensions: options.dimensions ?? 0,
+    distanceMethod: options.distanceMethod,
+    columns: options.columns,
+    indexSettings: options.indexSettings ?? MINIMAL_HGRAPH_INDEX_SETTINGS,
+    filter: options.filter,
+  };
+}
+
+/** Serialize search results to n8n execution data */
+function serializeSearchResults(
+  docs: [Document, number][],
+  itemIndex: number,
+  includeMetadata: boolean,
+): INodeExecutionData[] {
+  return docs.map(([doc, score]) => {
+    const document = {
+      pageContent: doc.pageContent,
+      ...(includeMetadata ? { metadata: doc.metadata } : {}),
+    };
+    return {
+      json: { document, score },
+      pairedItem: { item: itemIndex },
+    };
+  });
+}
+
 export async function processDocumentInput(
   documentInput: unknown,
   inputItem: INodeExecutionData,
@@ -566,89 +624,65 @@ export class VectorStoreHologres implements INodeType {
   };
 
   async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
-    const mode = this.getNodeParameter("mode", 0) as string;
+    const mode = this.getNodeParameter("mode", 0) as Mode;
     const embeddings = (await this.getInputConnectionData(
       NodeConnectionTypes.AiEmbedding,
       0,
     )) as Embeddings;
 
     // ── Load Mode ──
-    if (mode === "load") {
+    if (mode === MODE.LOAD) {
       const items = this.getInputData(0);
       const resultData: INodeExecutionData[] = [];
 
-      for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
-        const tableName = this.getNodeParameter(
-          "tableName",
-          itemIndex,
-          "",
-        ) as string;
-        const credentials = await this.getCredentials("hologresApi");
-        const pool = createPoolFromCredentials(credentials);
-        const columns = getColumnOptions(this);
-        const distanceMethod = this.getNodeParameter(
-          "options.distanceMethod",
-          0,
-          "Cosine",
-        ) as DistanceMethod;
+      // Fetch common config once
+      const credentials = (await this.getCredentials("hologresApi")) as HologresCredentials;
+      const pool = createPoolFromCredentials(credentials);
+      const columns = getColumnOptions(this);
+      const distanceMethod = getDistanceMethod(this);
 
-        const config: HologresVectorStoreArgs = {
-          pool,
-          tableName,
-          dimensions: 0,
-          distanceMethod,
-          columns,
-          indexSettings: {
-            baseQuantizationType: "rabitq",
-            useReorder: true,
-            maxDegree: 64,
-            efConstruction: 400,
-          },
-        };
-
-        const store = new HologresVectorStore(embeddings, config);
-        await store._initializeClient();
-
-        try {
-          const prompt = this.getNodeParameter("prompt", itemIndex) as string;
-          const topK = this.getNodeParameter("topK", itemIndex, 4) as number;
-          const includeDocumentMetadata = this.getNodeParameter(
-            "includeDocumentMetadata",
-            itemIndex,
-            true,
-          ) as boolean;
-
-          const filter = getMetadataFiltersValues(this, itemIndex);
-          const embeddedPrompt = await embeddings.embedQuery(prompt);
-          const docs = await store.similaritySearchVectorWithScore(
-            embeddedPrompt,
-            topK,
-            filter,
-          );
-
-          const serializedDocs = docs.map(([doc, score]) => {
-            const document = {
-              pageContent: doc.pageContent,
-              ...(includeDocumentMetadata ? { metadata: doc.metadata } : {}),
-            };
-            return {
-              json: { document, score },
-              pairedItem: { item: itemIndex },
-            };
+      try {
+        for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+          const tableName = this.getNodeParameter("tableName", itemIndex, "") as string;
+          const config = createStoreConfig(pool, tableName, {
+            columns,
+            distanceMethod,
           });
 
-          resultData.push(...serializedDocs);
-        } finally {
-          store.client?.release();
-          void store.pool.end();
+          const store = new HologresVectorStore(embeddings, config);
+          await store._initializeClient();
+
+          try {
+            const prompt = this.getNodeParameter("prompt", itemIndex) as string;
+            const topK = this.getNodeParameter("topK", itemIndex, 4) as number;
+            const includeDocumentMetadata = this.getNodeParameter(
+              "includeDocumentMetadata",
+              itemIndex,
+              true,
+            ) as boolean;
+
+            const filter = getMetadataFiltersValues(this, itemIndex);
+            const embeddedPrompt = await embeddings.embedQuery(prompt);
+            const docs = await store.similaritySearchVectorWithScore(
+              embeddedPrompt,
+              topK,
+              filter,
+            );
+
+            resultData.push(...serializeSearchResults(docs, itemIndex, includeDocumentMetadata));
+          } finally {
+            store.client?.release();
+          }
         }
+      } finally {
+        await pool.end();
       }
 
       return [resultData];
     }
 
     // ── Insert Mode ──
-    if (mode === "insert") {
+    if (mode === MODE.INSERT) {
       const items = this.getInputData();
       const documentInput = await this.getInputConnectionData(
         NodeConnectionTypes.AiDocument,
@@ -656,165 +690,117 @@ export class VectorStoreHologres implements INodeType {
       );
       const resultData: INodeExecutionData[] = [];
 
-      for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
-        if (this.getExecutionCancelSignal()?.aborted) break;
+      // Fetch common config once
+      const credentials = (await this.getCredentials("hologresApi")) as HologresCredentials;
+      const pool = createPoolFromCredentials(credentials);
+      const columns = getColumnOptions(this);
+      const distanceMethod = getDistanceMethod(this);
+      const indexSettings = getHGraphIndexSettings(this);
 
-        const { processedDocuments, serializedDocuments } =
-          await processDocumentInput(
-            documentInput,
-            items[itemIndex],
-            itemIndex,
-          );
-        resultData.push(...serializedDocuments);
+      try {
+        for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+          if (this.getExecutionCancelSignal()?.aborted) break;
 
-        const tableName = this.getNodeParameter(
-          "tableName",
-          itemIndex,
-          "",
-        ) as string;
-        const dimensions = this.getNodeParameter(
-          "dimensions",
-          itemIndex,
-          1536,
-        ) as number;
-        const embeddingBatchSize = this.getNodeParameter(
-          "embeddingBatchSize",
-          itemIndex,
-          10,
-        ) as number;
-        const credentials = await this.getCredentials("hologresApi");
-        const pool = createPoolFromCredentials(credentials);
-        const columns = getColumnOptions(this);
-        const distanceMethod = this.getNodeParameter(
-          "options.distanceMethod",
-          0,
-          "Cosine",
-        ) as DistanceMethod;
-        const indexSettings = getHGraphIndexSettings(this);
+          const { processedDocuments, serializedDocuments } =
+            await processDocumentInput(
+              documentInput,
+              items[itemIndex],
+              itemIndex,
+            );
+          resultData.push(...serializedDocuments);
 
-        const config: HologresVectorStoreArgs = {
-          pool,
-          tableName,
-          dimensions,
-          distanceMethod,
-          columns,
-          indexSettings,
-        };
+          const tableName = this.getNodeParameter("tableName", itemIndex, "") as string;
+          const dimensions = this.getNodeParameter("dimensions", itemIndex, 1536) as number;
+          const embeddingBatchSize = this.getNodeParameter("embeddingBatchSize", itemIndex, 10) as number;
 
-        // Process documents in batches
-        const vectorStore = await HologresVectorStore.initialize(
-          embeddings,
-          config,
-        );
-        try {
-          for (
-            let i = 0;
-            i < processedDocuments.length;
-            i += embeddingBatchSize
-          ) {
-            if (this.getExecutionCancelSignal()?.aborted) break;
-            const batch = processedDocuments.slice(i, i + embeddingBatchSize);
-            await vectorStore.addDocuments(batch);
+          const config = createStoreConfig(pool, tableName, {
+            dimensions,
+            columns,
+            distanceMethod,
+            indexSettings,
+          });
+
+          const vectorStore = await HologresVectorStore.initialize(embeddings, config);
+
+          try {
+            for (let i = 0; i < processedDocuments.length; i += embeddingBatchSize) {
+              if (this.getExecutionCancelSignal()?.aborted) break;
+              const batch = processedDocuments.slice(i, i + embeddingBatchSize);
+              await vectorStore.addDocuments(batch);
+            }
+          } finally {
+            vectorStore.client?.release();
           }
-        } finally {
-          vectorStore.client?.release();
-          await vectorStore.pool.end();
         }
+      } finally {
+        await pool.end();
       }
 
       return [resultData];
     }
 
     // ── Retrieve-as-Tool Mode (execute) ──
-    if (mode === "retrieve-as-tool") {
+    if (mode === MODE.RETRIEVE_AS_TOOL) {
       const items = this.getInputData(0);
       const resultData: INodeExecutionData[] = [];
 
-      for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
-        if (this.getExecutionCancelSignal()?.aborted) break;
+      // Fetch common config once
+      const credentials = (await this.getCredentials("hologresApi")) as HologresCredentials;
+      const pool = createPoolFromCredentials(credentials);
+      const columns = getColumnOptions(this);
+      const distanceMethod = getDistanceMethod(this);
 
-        const tableName = this.getNodeParameter(
-          "tableName",
-          itemIndex,
-          "",
-        ) as string;
-        const topK = this.getNodeParameter("topK", itemIndex, 4) as number;
-        const includeDocumentMetadata = this.getNodeParameter(
-          "includeDocumentMetadata",
-          itemIndex,
-          true,
-        ) as boolean;
-        const filter = getMetadataFiltersValues(this, itemIndex);
+      try {
+        for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+          if (this.getExecutionCancelSignal()?.aborted) break;
 
-        const credentials = await this.getCredentials("hologresApi");
-        const pool = createPoolFromCredentials(credentials);
-        const columns = getColumnOptions(this);
-        const distanceMethod = this.getNodeParameter(
-          "options.distanceMethod",
-          0,
-          "Cosine",
-        ) as DistanceMethod;
+          const tableName = this.getNodeParameter("tableName", itemIndex, "") as string;
+          const topK = this.getNodeParameter("topK", itemIndex, 4) as number;
+          const includeDocumentMetadata = this.getNodeParameter(
+            "includeDocumentMetadata",
+            itemIndex,
+            true,
+          ) as boolean;
+          const filter = getMetadataFiltersValues(this, itemIndex);
 
-        const config: HologresVectorStoreArgs = {
-          pool,
-          tableName,
-          dimensions: 0,
-          distanceMethod,
-          columns,
-          indexSettings: {
-            baseQuantizationType: "rabitq",
-            useReorder: true,
-            maxDegree: 64,
-            efConstruction: 400,
-          },
-        };
+          const config = createStoreConfig(pool, tableName, { columns, distanceMethod });
 
-        const store = new HologresVectorStore(embeddings, config);
-        await store._initializeClient();
+          const store = new HologresVectorStore(embeddings, config);
+          await store._initializeClient();
 
-        try {
-          // Get query from input item
-          const query =
-            (items[itemIndex].json?.chatInput as string) ??
-            (items[itemIndex].json?.query as string) ??
-            "";
-          if (!query) {
-            throw new NodeOperationError(
-              this.getNode(),
-              'No query found in input item. Expected "chatInput" or "query" field.',
+          try {
+            const query =
+              (items[itemIndex].json?.chatInput as string) ??
+              (items[itemIndex].json?.query as string) ??
+              "";
+            if (!query) {
+              throw new NodeOperationError(
+                this.getNode(),
+                'No query found in input item. Expected "chatInput" or "query" field.',
+              );
+            }
+
+            const embeddedPrompt = await embeddings.embedQuery(query);
+            const docs = await store.similaritySearchVectorWithScore(
+              embeddedPrompt,
+              topK,
+              filter,
             );
+
+            resultData.push(...serializeSearchResults(docs, itemIndex, includeDocumentMetadata));
+          } finally {
+            store.client?.release();
           }
-
-          const embeddedPrompt = await embeddings.embedQuery(query);
-          const docs = await store.similaritySearchVectorWithScore(
-            embeddedPrompt,
-            topK,
-            filter,
-          );
-
-          const serializedDocs = docs.map(([doc, score]) => {
-            const document = {
-              pageContent: doc.pageContent,
-              ...(includeDocumentMetadata ? { metadata: doc.metadata } : {}),
-            };
-            return {
-              json: { document, score },
-              pairedItem: { item: itemIndex },
-            };
-          });
-
-          resultData.push(...serializedDocs);
-        } finally {
-          store.client?.release();
-          void store.pool.end();
         }
+      } finally {
+        await pool.end();
       }
 
       return [resultData];
     }
 
     // ── Update Mode ──
-    if (mode === "update") {
+    if (mode === MODE.UPDATE) {
       const items = this.getInputData();
       const documentInput = await this.getInputConnectionData(
         NodeConnectionTypes.AiDocument,
@@ -822,60 +808,46 @@ export class VectorStoreHologres implements INodeType {
       );
       const resultData: INodeExecutionData[] = [];
 
-      for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
-        if (this.getExecutionCancelSignal()?.aborted) break;
+      // Fetch common config once
+      const credentials = (await this.getCredentials("hologresApi")) as HologresCredentials;
+      const pool = createPoolFromCredentials(credentials);
+      const columns = getColumnOptions(this);
 
-        const { processedDocuments, serializedDocuments } =
-          await processDocumentInput(
-            documentInput,
-            items[itemIndex],
-            itemIndex,
-          );
+      try {
+        for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+          if (this.getExecutionCancelSignal()?.aborted) break;
 
-        if (processedDocuments.length === 0) {
-          throw new NodeOperationError(
-            this.getNode(),
-            "No document provided for update",
-          );
+          const { processedDocuments, serializedDocuments } =
+            await processDocumentInput(
+              documentInput,
+              items[itemIndex],
+              itemIndex,
+            );
+
+          if (processedDocuments.length === 0) {
+            throw new NodeOperationError(
+              this.getNode(),
+              "No document provided for update",
+            );
+          }
+
+          const id = this.getNodeParameter("id", itemIndex) as string;
+          const tableName = this.getNodeParameter("tableName", itemIndex, "") as string;
+
+          const config = createStoreConfig(pool, tableName, { columns, distanceMethod: "Cosine" });
+
+          const store = new HologresVectorStore(embeddings, config);
+          await store._initializeClient();
+
+          try {
+            await store.update({ id, document: processedDocuments[0] });
+            resultData.push(...serializedDocuments);
+          } finally {
+            store.client?.release();
+          }
         }
-
-        const id = this.getNodeParameter("id", itemIndex) as string;
-        const tableName = this.getNodeParameter(
-          "tableName",
-          itemIndex,
-          "",
-        ) as string;
-        const credentials = await this.getCredentials("hologresApi");
-        const pool = createPoolFromCredentials(credentials);
-        const columns = getColumnOptions(this);
-
-        const config: HologresVectorStoreArgs = {
-          pool,
-          tableName,
-          dimensions: 0,
-          distanceMethod: "Cosine",
-          columns,
-          indexSettings: {
-            baseQuantizationType: "rabitq",
-            useReorder: true,
-            maxDegree: 64,
-            efConstruction: 400,
-          },
-        };
-
-        const store = new HologresVectorStore(embeddings, config);
-        await store._initializeClient();
-
-        try {
-          await store.update({
-            id,
-            document: processedDocuments[0],
-          });
-          resultData.push(...serializedDocuments);
-        } finally {
-          store.client?.release();
-          void store.pool.end();
-        }
+      } finally {
+        await pool.end();
       }
 
       return [resultData];
@@ -891,41 +863,28 @@ export class VectorStoreHologres implements INodeType {
     this: ISupplyDataFunctions,
     itemIndex: number,
   ): Promise<SupplyData> {
-    const mode = this.getNodeParameter("mode", 0) as string;
+    const mode = this.getNodeParameter("mode", 0) as Mode;
     const embeddings = (await this.getInputConnectionData(
       NodeConnectionTypes.AiEmbedding,
       0,
     )) as Embeddings;
 
     // ── Retrieve Mode ──
-    if (mode === "retrieve") {
+    if (mode === MODE.RETRIEVE) {
       const filter = getMetadataFiltersValues(this, itemIndex);
       const tableName = this.getNodeParameter("tableName", itemIndex, "", {
         extractValue: true,
       }) as string;
-      const credentials = await this.getCredentials("hologresApi");
+      const credentials = (await this.getCredentials("hologresApi")) as HologresCredentials;
       const pool = createPoolFromCredentials(credentials);
       const columns = getColumnOptions(this);
-      const distanceMethod = this.getNodeParameter(
-        "options.distanceMethod",
-        0,
-        "Cosine",
-      ) as DistanceMethod;
+      const distanceMethod = getDistanceMethod(this);
 
-      const config: HologresVectorStoreArgs = {
-        pool,
-        tableName,
-        dimensions: 0,
-        distanceMethod,
+      const config = createStoreConfig(pool, tableName, {
         columns,
-        indexSettings: {
-          baseQuantizationType: "rabitq",
-          useReorder: true,
-          maxDegree: 64,
-          efConstruction: 400,
-        },
+        distanceMethod,
         filter,
-      };
+      });
 
       const store = new HologresVectorStore(embeddings, config);
       await store._initializeClient();
@@ -933,19 +892,24 @@ export class VectorStoreHologres implements INodeType {
       return {
         response: store,
         closeFunction: async () => {
-          store.client?.release();
-          void store.pool.end();
+          await store.close();
         },
       };
     }
 
     // ── Retrieve-as-Tool Mode ──
-    if (mode === "retrieve-as-tool") {
+    if (mode === MODE.RETRIEVE_AS_TOOL) {
       const toolDescription = this.getNodeParameter(
         "toolDescription",
         itemIndex,
       ) as string;
       const toolName = this.getNodeParameter("toolName", itemIndex) as string;
+
+      // Create pool once for the tool
+      const credentials = (await this.getCredentials("hologresApi")) as HologresCredentials;
+      const pool = createPoolFromCredentials(credentials);
+      const columns = getColumnOptions(this);
+      const distanceMethod = getDistanceMethod(this);
 
       const vectorStoreTool = new DynamicTool({
         name: toolName,
@@ -962,28 +926,11 @@ export class VectorStoreHologres implements INodeType {
           const tableName = this.getNodeParameter("tableName", itemIndex, "", {
             extractValue: true,
           }) as string;
-          const credentials = await this.getCredentials("hologresApi");
-          const pool = createPoolFromCredentials(credentials);
-          const columns = getColumnOptions(this);
-          const distanceMethod = this.getNodeParameter(
-            "options.distanceMethod",
-            0,
-            "Cosine",
-          ) as DistanceMethod;
 
-          const config: HologresVectorStoreArgs = {
-            pool,
-            tableName,
-            dimensions: 0,
-            distanceMethod,
+          const config = createStoreConfig(pool, tableName, {
             columns,
-            indexSettings: {
-              baseQuantizationType: "rabitq",
-              useReorder: true,
-              maxDegree: 64,
-              efConstruction: 400,
-            },
-          };
+            distanceMethod,
+          });
 
           const store = new HologresVectorStore(embeddings, config);
           await store._initializeClient();
@@ -1005,13 +952,15 @@ export class VectorStoreHologres implements INodeType {
             return JSON.stringify(results);
           } finally {
             store.client?.release();
-            void store.pool.end();
           }
         },
       });
 
       return {
         response: vectorStoreTool,
+        closeFunction: async () => {
+          await pool.end();
+        },
       };
     }
 
