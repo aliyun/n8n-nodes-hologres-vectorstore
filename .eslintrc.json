@@ -1,6 +1,7 @@
 {
 	"root": true,
 	"parser": "@typescript-eslint/parser",
+	"plugins": ["@typescript-eslint"],
 	"parserOptions": {
 		"ecmaVersion": 2020,
 		"sourceType": "module"
@@ -10,7 +11,11 @@
 		"es6": true
 	},
 	"rules": {
-		"no-unused-vars": "warn",
+		"no-unused-vars": "off",
+		"@typescript-eslint/no-unused-vars": ["warn", {
+			"argsIgnorePattern": "^_",
+			"varsIgnorePattern": "^_"
+		}],
 		"no-console": "off"
 	}
 }
