@@ -174,6 +174,9 @@ npm login
 # Publish
 npm publish --dry-run  # Test publish first
 npm publish
+
+# Push tags
+git push origin --tags
 ```
 
 > **Note:** `npm version` will automatically run `npm run lint && npm run build` before updating the version, then run `npm run build` again after to ensure the build artifacts contain the new version number.
