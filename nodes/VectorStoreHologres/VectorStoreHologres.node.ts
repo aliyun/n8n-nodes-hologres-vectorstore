@@ -636,14 +636,20 @@ export class VectorStoreHologres implements INodeType {
       const resultData: INodeExecutionData[] = [];
 
       // Fetch common config once
-      const credentials = (await this.getCredentials("hologresApi")) as HologresCredentials;
+      const credentials = (await this.getCredentials(
+        "hologresApi",
+      )) as HologresCredentials;
       const pool = createPoolFromCredentials(credentials);
       const columns = getColumnOptions(this);
       const distanceMethod = getDistanceMethod(this);
 
       try {
         for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
-          const tableName = this.getNodeParameter("tableName", itemIndex, "") as string;
+          const tableName = this.getNodeParameter(
+            "tableName",
+            itemIndex,
+            "",
+          ) as string;
           const config = createStoreConfig(pool, tableName, {
             columns,
             distanceMethod,
@@ -669,7 +675,13 @@ export class VectorStoreHologres implements INodeType {
               filter,
             );
 
-            resultData.push(...serializeSearchResults(docs, itemIndex, includeDocumentMetadata));
+            resultData.push(
+              ...serializeSearchResults(
+                docs,
+                itemIndex,
+                includeDocumentMetadata,
+              ),
+            );
           } finally {
             store.client?.release();
           }
@@ -691,7 +703,9 @@ export class VectorStoreHologres implements INodeType {
       const resultData: INodeExecutionData[] = [];
 
       // Fetch common config once
-      const credentials = (await this.getCredentials("hologresApi")) as HologresCredentials;
+      const credentials = (await this.getCredentials(
+        "hologresApi",
+      )) as HologresCredentials;
       const pool = createPoolFromCredentials(credentials);
       const columns = getColumnOptions(this);
       const distanceMethod = getDistanceMethod(this);
@@ -709,9 +723,21 @@ export class VectorStoreHologres implements INodeType {
             );
           resultData.push(...serializedDocuments);
 
-          const tableName = this.getNodeParameter("tableName", itemIndex, "") as string;
-          const dimensions = this.getNodeParameter("dimensions", itemIndex, 1536) as number;
-          const embeddingBatchSize = this.getNodeParameter("embeddingBatchSize", itemIndex, 10) as number;
+          const tableName = this.getNodeParameter(
+            "tableName",
+            itemIndex,
+            "",
+          ) as string;
+          const dimensions = this.getNodeParameter(
+            "dimensions",
+            itemIndex,
+            1536,
+          ) as number;
+          const embeddingBatchSize = this.getNodeParameter(
+            "embeddingBatchSize",
+            itemIndex,
+            10,
+          ) as number;
 
           const config = createStoreConfig(pool, tableName, {
             dimensions,
@@ -720,10 +746,17 @@ export class VectorStoreHologres implements INodeType {
             indexSettings,
           });
 
-          const vectorStore = await HologresVectorStore.initialize(embeddings, config);
+          const vectorStore = await HologresVectorStore.initialize(
+            embeddings,
+            config,
+          );
 
           try {
-            for (let i = 0; i < processedDocuments.length; i += embeddingBatchSize) {
+            for (
+              let i = 0;
+              i < processedDocuments.length;
+              i += embeddingBatchSize
+            ) {
               if (this.getExecutionCancelSignal()?.aborted) break;
               const batch = processedDocuments.slice(i, i + embeddingBatchSize);
               await vectorStore.addDocuments(batch);
@@ -745,7 +778,9 @@ export class VectorStoreHologres implements INodeType {
       const resultData: INodeExecutionData[] = [];
 
       // Fetch common config once
-      const credentials = (await this.getCredentials("hologresApi")) as HologresCredentials;
+      const credentials = (await this.getCredentials(
+        "hologresApi",
+      )) as HologresCredentials;
       const pool = createPoolFromCredentials(credentials);
       const columns = getColumnOptions(this);
       const distanceMethod = getDistanceMethod(this);
@@ -754,7 +789,11 @@ export class VectorStoreHologres implements INodeType {
         for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
           if (this.getExecutionCancelSignal()?.aborted) break;
 
-          const tableName = this.getNodeParameter("tableName", itemIndex, "") as string;
+          const tableName = this.getNodeParameter(
+            "tableName",
+            itemIndex,
+            "",
+          ) as string;
           const topK = this.getNodeParameter("topK", itemIndex, 4) as number;
           const includeDocumentMetadata = this.getNodeParameter(
             "includeDocumentMetadata",
@@ -763,7 +802,10 @@ export class VectorStoreHologres implements INodeType {
           ) as boolean;
           const filter = getMetadataFiltersValues(this, itemIndex);
 
-          const config = createStoreConfig(pool, tableName, { columns, distanceMethod });
+          const config = createStoreConfig(pool, tableName, {
+            columns,
+            distanceMethod,
+          });
 
           const store = new HologresVectorStore(embeddings, config);
           await store._initializeClient();
@@ -787,7 +829,13 @@ export class VectorStoreHologres implements INodeType {
               filter,
             );
 
-            resultData.push(...serializeSearchResults(docs, itemIndex, includeDocumentMetadata));
+            resultData.push(
+              ...serializeSearchResults(
+                docs,
+                itemIndex,
+                includeDocumentMetadata,
+              ),
+            );
           } finally {
             store.client?.release();
           }
@@ -809,7 +857,9 @@ export class VectorStoreHologres implements INodeType {
       const resultData: INodeExecutionData[] = [];
 
       // Fetch common config once
-      const credentials = (await this.getCredentials("hologresApi")) as HologresCredentials;
+      const credentials = (await this.getCredentials(
+        "hologresApi",
+      )) as HologresCredentials;
       const pool = createPoolFromCredentials(credentials);
       const columns = getColumnOptions(this);
 
@@ -832,9 +882,16 @@ export class VectorStoreHologres implements INodeType {
           }
 
           const id = this.getNodeParameter("id", itemIndex) as string;
-          const tableName = this.getNodeParameter("tableName", itemIndex, "") as string;
+          const tableName = this.getNodeParameter(
+            "tableName",
+            itemIndex,
+            "",
+          ) as string;
 
-          const config = createStoreConfig(pool, tableName, { columns, distanceMethod: "Cosine" });
+          const config = createStoreConfig(pool, tableName, {
+            columns,
+            distanceMethod: "Cosine",
+          });
 
           const store = new HologresVectorStore(embeddings, config);
           await store._initializeClient();
@@ -875,7 +932,9 @@ export class VectorStoreHologres implements INodeType {
       const tableName = this.getNodeParameter("tableName", itemIndex, "", {
         extractValue: true,
       }) as string;
-      const credentials = (await this.getCredentials("hologresApi")) as HologresCredentials;
+      const credentials = (await this.getCredentials(
+        "hologresApi",
+      )) as HologresCredentials;
       const pool = createPoolFromCredentials(credentials);
       const columns = getColumnOptions(this);
       const distanceMethod = getDistanceMethod(this);
@@ -906,7 +965,9 @@ export class VectorStoreHologres implements INodeType {
       const toolName = this.getNodeParameter("toolName", itemIndex) as string;
 
       // Create pool once for the tool
-      const credentials = (await this.getCredentials("hologresApi")) as HologresCredentials;
+      const credentials = (await this.getCredentials(
+        "hologresApi",
+      )) as HologresCredentials;
       const pool = createPoolFromCredentials(credentials);
       const columns = getColumnOptions(this);
       const distanceMethod = getDistanceMethod(this);

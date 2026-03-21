@@ -199,8 +199,12 @@ export class HologresVectorStore extends VectorStore {
     metadata: string;
     vector: string;
   } {
-    const { idColumnName, contentColumnName, metadataColumnName, vectorColumnName } =
-      this.columns;
+    const {
+      idColumnName,
+      contentColumnName,
+      metadataColumnName,
+      vectorColumnName,
+    } = this.columns;
     return {
       table: quoteIdentifier(this.tableName),
       id: quoteIdentifier(idColumnName),
@@ -215,7 +219,8 @@ export class HologresVectorStore extends VectorStore {
    * float4[] + CHECK constraint for vector columns.
    */
   async ensureTableInDatabase(): Promise<void> {
-    const { table, id, content, metadata, vector } = this.getQuotedIdentifiers();
+    const { table, id, content, metadata, vector } =
+      this.getQuotedIdentifiers();
     const tableQuery = `
 			CREATE TABLE IF NOT EXISTS ${table} (
 				${id} text NOT NULL PRIMARY KEY,
@@ -291,11 +296,15 @@ export class HologresVectorStore extends VectorStore {
     if (vectors.length === 0) return [];
 
     const ids = options?.ids ?? vectors.map(() => crypto.randomUUID());
-    const { table, id, content, vector, metadata } = this.getQuotedIdentifiers();
+    const { table, id, content, vector, metadata } =
+      this.getQuotedIdentifiers();
 
     // Use multi-row INSERT for efficiency
     const valuePlaceholders = vectors
-      .map((_, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}::float4[], $${i * 4 + 4}::jsonb)`)
+      .map(
+        (_, i) =>
+          `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}::float4[], $${i * 4 + 4}::jsonb)`,
+      )
       .join(", ");
 
     const queryText = `
@@ -319,7 +328,9 @@ export class HologresVectorStore extends VectorStore {
    * for the configured distance method.
    */
   private getDistanceFunctionAndOrder(): { func: string; order: string } {
-    return DISTANCE_FUNCTION_MAP[this.distanceMethod] ?? DISTANCE_FUNCTION_MAP.Cosine;
+    return (
+      DISTANCE_FUNCTION_MAP[this.distanceMethod] ?? DISTANCE_FUNCTION_MAP.Cosine
+    );
   }
 
   /**
@@ -415,7 +426,8 @@ export class HologresVectorStore extends VectorStore {
    * This will re-embed the content and update the vector.
    */
   async update(params: { id: string; document: Document }): Promise<void> {
-    const { table, id, content, vector, metadata } = this.getQuotedIdentifiers();
+    const { table, id, content, vector, metadata } =
+      this.getQuotedIdentifiers();
 
     // Re-embed the content
     const [vec] = await this.embeddings.embedDocuments([
