@@ -168,6 +168,9 @@ npm version minor
 # For major releases (breaking changes)
 npm version major
 
+# Login
+npm login
+
 # Publish
 npm publish --dry-run  # Test publish first
 npm publish
