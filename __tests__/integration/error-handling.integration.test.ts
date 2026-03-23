@@ -12,8 +12,10 @@ import {
   generateTestTableName,
   cleanupTable,
   defaultTestConfig,
+  testConfig,
 } from './setup';
 import { HologresVectorStore, quoteIdentifier, VALID_IDENTIFIER } from '../../nodes/VectorStoreHologres/HologresVectorStore';
+import { VectorStoreHologres } from '../../nodes/VectorStoreHologres/VectorStoreHologres.node';
 import { FakeEmbeddings } from '../mocks/embeddings.mock';
 import { Document } from '@langchain/core/documents';
 import pg from 'pg';
@@ -262,6 +264,153 @@ describeIntegration('Error Handling Integration Tests', () => {
       await expect(store.ensureTableInDatabase()).rejects.toThrow();
 
       await invalidPool.end();
+    });
+  });
+
+  describe('Node Error Handling', () => {
+    const node = new VectorStoreHologres();
+
+    // Helper to create mock execute context
+    function createMockContext(options: {
+      mode: string;
+      tableName: string;
+      inputData?: Array<{ json: Record<string, unknown> }>;
+      documentInput?: unknown;
+      id?: string;
+    }) {
+      const mockEmbeddings = new FakeEmbeddings(dimensions);
+
+      const params: Record<string, unknown> = {
+        mode: options.mode,
+        tableName: options.tableName,
+        topK: 4,
+        includeDocumentMetadata: true,
+        dimensions: dimensions,
+        embeddingBatchSize: 10,
+        id: options.id || 'test-id',
+        toolName: 'test_tool',
+        toolDescription: 'Test tool description',
+        options: {},
+      };
+
+      return {
+        getNodeParameter: jest.fn((name: string, _index: number, defaultValue?: unknown) => {
+          if (name.includes('.')) {
+            const parts = name.split('.');
+            let value: unknown = params;
+            for (const part of parts) {
+              value = (value as Record<string, unknown>)?.[part];
+              if (value === undefined) return defaultValue;
+            }
+            return value;
+          }
+          return params[name] ?? defaultValue;
+        }),
+        getInputData: jest.fn(() => options.inputData || [{ json: {} }]),
+        getCredentials: jest.fn().mockResolvedValue({
+          host: testConfig.host,
+          port: testConfig.port,
+          database: testConfig.database,
+          user: testConfig.user,
+          password: testConfig.password,
+          ssl: testConfig.ssl === 'disable' ? 'disable' : testConfig.ssl,
+          allowUnauthorizedCerts: testConfig.ssl === 'allow-unauthorized',
+        }),
+        getInputConnectionData: jest.fn().mockImplementation(async (type: string) => {
+          if (type === 'ai_embedding') {
+            return mockEmbeddings;
+          }
+          if (type === 'ai_document') {
+            return options.documentInput || [];
+          }
+          return null;
+        }),
+        getNode: jest.fn().mockReturnValue({
+          name: 'Test Hologres Node',
+        }),
+        getExecutionCancelSignal: jest.fn().mockReturnValue({ aborted: false }),
+      };
+    }
+
+    it('should throw error when no query in retrieve-as-tool mode', async () => {
+      // This tests line 819: No query found in input item
+      const tableName = generateTestTableName('no_query');
+
+      // Create table first
+      const store = await HologresVectorStore.initialize(embeddings, {
+        pool,
+        tableName,
+        dimensions,
+        ...defaultTestConfig,
+      });
+      store.client?.release();
+
+      try {
+        const mockContext = createMockContext({
+          mode: 'retrieve-as-tool',
+          tableName,
+          inputData: [{ json: {} }], // No chatInput or query
+        });
+
+        await expect(
+          node.execute.call(mockContext as any)
+        ).rejects.toThrow('No query found in input item');
+      } finally {
+        await cleanupTable(pool, tableName);
+      }
+    });
+
+    it('should throw error when no document for update', async () => {
+      // This tests line 878: No document provided for update
+      const tableName = generateTestTableName('no_doc_update');
+
+      // Create table first
+      const store = await HologresVectorStore.initialize(embeddings, {
+        pool,
+        tableName,
+        dimensions,
+        ...defaultTestConfig,
+      });
+      store.client?.release();
+
+      try {
+        const mockContext = createMockContext({
+          mode: 'update',
+          tableName,
+          id: 'test-id',
+          documentInput: [], // Empty documents
+        });
+
+        await expect(
+          node.execute.call(mockContext as any)
+        ).rejects.toThrow('No document provided for update');
+      } finally {
+        await cleanupTable(pool, tableName);
+      }
+    });
+
+    it('should throw error for invalid mode in execute', async () => {
+      // This tests line 913: Invalid mode in execute
+      const mockContext = createMockContext({
+        mode: 'invalid_mode',
+        tableName: generateTestTableName('invalid'),
+      });
+
+      await expect(
+        node.execute.call(mockContext as any)
+      ).rejects.toThrow('The operation mode "invalid_mode" is not supported in execute');
+    });
+
+    it('should throw error for invalid mode in supplyData', async () => {
+      // This tests line 1028: Invalid mode in supplyData
+      const mockContext = createMockContext({
+        mode: 'invalid_mode',
+        tableName: generateTestTableName('invalid'),
+      });
+
+      await expect(
+        node.supplyData.call(mockContext as any, 0)
+      ).rejects.toThrow('The operation mode "invalid_mode" is not supported in supplyData');
     });
   });
 });

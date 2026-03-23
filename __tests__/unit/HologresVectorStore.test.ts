@@ -341,6 +341,17 @@ describe('P1: HologresVectorStore', () => {
   });
 
   describe('addVectors()', () => {
+    it('should return empty array for empty vectors', async () => {
+      const store = new HologresVectorStore(embeddings, defaultArgs);
+      const vectors: number[][] = [];
+      const documents: Document[] = [];
+
+      const ids = await store.addVectors(vectors, documents);
+
+      expect(ids).toEqual([]);
+      expect(mockPool.query).not.toHaveBeenCalled();
+    });
+
     it('should generate UUIDs when ids not provided', async () => {
       const store = new HologresVectorStore(embeddings, defaultArgs);
       const vectors = [createStaticVector(4)];
@@ -518,6 +529,18 @@ describe('P1: HologresVectorStore', () => {
       expect(call[0]).toContain('WHERE');
       expect(call[0]).toContain('"metadata"');
       expect(call[1]).toContain('test');
+    });
+
+    it('should use default paramOffset when buildFilterClauses called without offset', async () => {
+      const store = new HologresVectorStore(embeddings, defaultArgs);
+
+      // Call buildFilterClauses via (store as any) to test default paramOffset
+      const result = (store as any).buildFilterClauses({ category: 'test' });
+
+      expect(result.whereClauses).toHaveLength(1);
+      expect(result.parameters).toContain('test');
+      // With default paramOffset=0, the parameter placeholder should be $1
+      expect(result.whereClauses[0]).toContain('$1');
     });
 
     it('should reject invalid metadata filter keys', async () => {
@@ -719,6 +742,27 @@ describe('P1: HologresVectorStore', () => {
 
       expect(store).toBeInstanceOf(HologresVectorStore);
       expect(mockPool.query).toHaveBeenCalled();
+    });
+  });
+
+  describe('close()', () => {
+    it('should release client and end pool', async () => {
+      const store = new HologresVectorStore(embeddings, defaultArgs);
+      await store._initializeClient();
+
+      await store.close();
+
+      expect(mockClient.release).toHaveBeenCalled();
+      expect(mockPool.end).toHaveBeenCalled();
+    });
+
+    it('should handle case when client is undefined', async () => {
+      const store = new HologresVectorStore(embeddings, defaultArgs);
+      // Don't initialize client
+
+      await store.close();
+
+      expect(mockPool.end).toHaveBeenCalled();
     });
   });
 });

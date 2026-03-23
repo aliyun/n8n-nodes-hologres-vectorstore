@@ -1112,6 +1112,37 @@ describe('supplyData() - retrieve-as-tool mode', () => {
     // Should not have metadata
     expect(parsed[0]).not.toHaveProperty('metadata');
   });
+
+  it('should have closeFunction that ends pool', async () => {
+    const mockPool = createMockPool();
+    const context = createMockSupplyDataContext({
+      mode: 'retrieve-as-tool',
+      tableName: 'test_table',
+      toolName: 'test_tool',
+      toolDescription: 'A test tool',
+      topK: 4,
+      includeDocumentMetadata: true,
+      options: {},
+    });
+
+    context.getInputConnectionData = jest.fn().mockResolvedValue(embeddings);
+
+    // Mock createPoolFromCredentials to return our mock pool
+    const { createPoolFromCredentials } = require('../../nodes/VectorStoreHologres/HologresVectorStore');
+    (createPoolFromCredentials as jest.Mock).mockReturnValue(mockPool);
+
+    const MockHologresVectorStore = require('../../nodes/VectorStoreHologres/HologresVectorStore').HologresVectorStore;
+    MockHologresVectorStore.mockImplementation(() => mockStore);
+
+    const result = await node.supplyData.call(context, 0);
+
+    // Test closeFunction - this covers line 1023
+    expect(result.closeFunction).toBeDefined();
+    await result.closeFunction!();
+
+    // Pool should be ended via closeFunction
+    expect(mockPool.end).toHaveBeenCalled();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

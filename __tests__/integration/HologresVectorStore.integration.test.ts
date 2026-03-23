@@ -12,7 +12,7 @@ import {
   generateTestTableName,
   cleanupTable,
 } from './setup';
-import { HologresVectorStore } from '../../nodes/VectorStoreHologres/HologresVectorStore';
+import { HologresVectorStore, DISTANCE_FUNCTION_MAP } from '../../nodes/VectorStoreHologres/HologresVectorStore';
 import { FakeEmbeddings } from '../mocks/embeddings.mock';
 import { Document } from '@langchain/core/documents';
 import pg from 'pg';
@@ -374,6 +374,125 @@ describeIntegration('HologresVectorStore Integration Tests', () => {
       } finally {
         store.client?.release();
         await cleanupTable(pool, testTable);
+      }
+    });
+  });
+
+  describe('Deprecated API', () => {
+    it('should expose pool getter for backward compatibility', async () => {
+      // This tests line 161: get pool()
+      const tableName = generateTestTableName('deprecated_pool');
+      const store = await HologresVectorStore.initialize(embeddings, {
+        pool,
+        tableName,
+        dimensions,
+        ...defaultConfig,
+      });
+
+      try {
+        // The pool getter should return the same pool that was passed in
+        expect(store.pool).toBeDefined();
+        expect(store.pool).toBe(pool);
+
+        store.client?.release();
+      } finally {
+        await cleanupTable(pool, tableName);
+      }
+    });
+  });
+
+  describe('Edge Cases', () => {
+    it('should handle empty vectors array in addVectors', async () => {
+      // This tests line 296: if (vectors.length === 0) return [];
+      const tableName = generateTestTableName('empty_vectors');
+      const store = await HologresVectorStore.initialize(embeddings, {
+        pool,
+        tableName,
+        dimensions,
+        ...defaultConfig,
+      });
+
+      try {
+        // addVectors with empty array should return empty array
+        const ids = await store.addVectors([], []);
+        expect(ids).toEqual([]);
+        expect(ids).toHaveLength(0);
+
+        store.client?.release();
+      } finally {
+        await cleanupTable(pool, tableName);
+      }
+    });
+
+    it('should handle null metadata in search results', async () => {
+      // This tests line 404: ?? {} fallback for null metadata
+      const tableName = generateTestTableName('null_metadata');
+
+      const store = await HologresVectorStore.initialize(embeddings, {
+        pool,
+        tableName,
+        dimensions,
+        ...defaultConfig,
+      });
+
+      try {
+        // Insert document directly with null metadata via raw SQL
+        const client = await pool.connect();
+        try {
+          const queryVector = await embeddings.embedQuery('test');
+          const embeddingString = `{${queryVector.join(',')}}`;
+
+          // Insert a document with null metadata
+          await client.query(
+            `INSERT INTO "${tableName}"(id, text, embedding, metadata) VALUES ($1, $2, $3::float4[], NULL)`,
+            ['null-meta-id', 'Document with null metadata', embeddingString]
+          );
+
+          // Search should handle null metadata gracefully
+          const results = await store.similaritySearchVectorWithScore(queryVector, 1);
+          expect(results).toHaveLength(1);
+          expect(results[0][0].metadata).toEqual({});
+        } finally {
+          client.release();
+        }
+
+        store.client?.release();
+      } finally {
+        await cleanupTable(pool, tableName);
+      }
+    });
+  });
+
+  describe('Distance Function', () => {
+    it('should fallback to Cosine for invalid distance method', async () => {
+      // This tests lines 332-343: fallback to DISTANCE_FUNCTION_MAP.Cosine
+      const tableName = generateTestTableName('fallback_distance');
+
+      // Create store with invalid distance method (type assertion to bypass TypeScript)
+      const store = new HologresVectorStore(embeddings, {
+        pool,
+        tableName,
+        dimensions,
+        ...defaultConfig,
+        distanceMethod: 'InvalidMethod' as any,
+      });
+
+      try {
+        await store._initializeClient();
+        await store.ensureTableInDatabase();
+
+        // Insert a document
+        const doc = new Document({ pageContent: 'Test document' });
+        await store.addDocuments([doc]);
+
+        // Search should work using the fallback (Cosine)
+        const queryVector = await embeddings.embedQuery('test');
+        const results = await store.similaritySearchVectorWithScore(queryVector, 1);
+        expect(results).toHaveLength(1);
+
+        store.client?.release();
+      } finally {
+        await cleanupTable(pool, tableName);
       }
     });
   });
